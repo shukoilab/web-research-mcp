@@ -307,6 +307,23 @@ pnpm run build
 
 ---
 
+## 🙏 Acknowledgements & Open-Source Credits
+
+This project is built on top of an incredible open-source ecosystem. Sincere gratitude and credits go to the creators and maintainers of the following foundations:
+
+- **[Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)** — Undetected browser automation driver eliminating CDP leaks, `--enable-automation`, and runtime flags for genuine consumer fingerprints.
+- **[Shukoi Framework](https://github.com/shukoilab/shukoi)** (`@shukoi/core`, `@shukoi/mcp`, `@shukoi/selfhost`) — Modular TypeScript runtime framework powering MCP action dispatching and self-hosted HTTP server lifecycles.
+- **[Model Context Protocol SDK](https://github.com/modelcontextprotocol/typescript-sdk)** — Official TypeScript SDK implementing the MCP specification across STDIO and Streamable HTTP transports.
+- **[Mozilla Readability](https://github.com/mozilla/readability)** — Standalone content extraction engine from Mozilla Firefox's Reader View for clean, token-efficient article parsing.
+- **[LinkeDOM](https://github.com/WebReflection/linkedom)** — High-performance, lightweight server-side DOM implementation with near-zero memory footprint.
+- **[Unified Ecosystem](https://unifiedjs.com/)** (`unified`, `rehype-parse`, `rehype-remark`, `remark-gfm`, `remark-stringify`) — Composable syntax tree (AST) pipeline transforming HTML into high-density GitHub Flavored Markdown.
+- **[TypeBox](https://github.com/sinclairzx81/typebox)** — High-performance JSON Schema Type Builder with static type inference enforcing strict input/output contracts.
+- **[Hono](https://hono.dev/)** — Ultrafast, lightweight web framework driving native HTTP REST and Kubernetes health check endpoints.
+- **[jose](https://github.com/panva/jose)** — Universal Web Cryptography library for secure token validation and cryptographic operations.
+- **[Biome](https://biomejs.dev/) & [Vitest](https://vitest.dev/)** — Modern development toolchains delivering blazing-fast linting, formatting, and automated testing.
+
+---
+
 ## 📄 License
 
 MIT © [Shukoi Lab](https://github.com/shukoilab)
