@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Production build & outputs
+dist/
+coverage/
+
+# Logs & temp files
+*.log
+*.log.*
+*.tmp
+*.swp
+*.swo
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.pfx
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Agent workspaces & ephemeral handoff artifacts
+.agent/
+.opencode/
+
+# Browser profiles & automation artifacts
+*-profile/
+*profile*/
+chrome-profile/
+test-results/
+playwright-report/
+blob-report/
