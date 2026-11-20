@@ -52,8 +52,9 @@
     "typecheck": "tsc --noEmit",
     "dev": "node --watch src/entries/mcp-http.ts",
     "start": "node dist/entries/mcp-http.js",
-    "docker:build": "docker build -t ghcr.io/shukoilab/web-research-mcp:1.1.0 .",
-    "docker:run": "docker run -d -p 3000:3000 -e BROWSER_DISPLAY=:99 ghcr.io/shukoilab/web-research-mcp:1.1.0",
+    "bump": "tsx scripts/bump-version.ts",
+    "docker:build": "docker build -t ghcr.io/shukoilab/web-research-mcp:latest .",
+    "docker:run": "docker run -d -p 3000:3000 --shm-size=1gb ghcr.io/shukoilab/web-research-mcp:latest",
     "lint": "biome check .",
     "format": "biome format --write ."
   },
@@ -77,6 +78,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",
     "@types/node": "^22.13.4",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "vitest": "^3.0.5"
   }

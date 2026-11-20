@@ -1,20 +1,29 @@
-name: Publish OCI Image & MCP Registry
+name: CI Quality Gate & Automated Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Manual release override (auto, patch, minor, major)'
+        required: false
+        default: 'auto'
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Build, Test, Push OCI Image and Publish to MCP Registry
+  verify:
+    name: Verify Quality Gates
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # Required for publishing OCI images to ghcr.io
-      id-token: write # Required for GitHub OIDC authentication to MCP Registry
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -45,35 +54,6 @@ jobs:
       - name: Compile production distribution
         run: pnpm run build
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push Docker image to GHCR
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Download and verify mcp-publisher CLI
         run: |
           set -euo pipefail
@@ -95,8 +75,117 @@ jobs:
       - name: Validate server.json against MCP Registry
         run: ./mcp-publisher validate server.json
 
+  release:
+    name: Auto-Bump, Tag & Publish
+    needs: verify
+    if: |
+      github.event_name != 'pull_request' &&
+      github.repository == 'shukoilab/web-research-mcp' &&
+      !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for committing, tagging, and creating GitHub releases
+      packages: write # Required for publishing OCI images to ghcr.io
+      id-token: write # Required for GitHub OIDC authentication to MCP Registry
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history required for git describe and commit parsing
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Calculate SemVer and Synchronize Versions
+        id: bump
+        run: |
+          pnpm tsx scripts/bump-version.ts --release-type=${{ github.event.inputs.release_type || 'auto' }}
+
+      - name: Commit, Tag & Push
+        if: steps.bump.outputs.should_release == 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          git add package.json server.json src/config.ts README.md
+          git commit -m "chore(release): v${NEW_VERSION} [skip ci]"
+          git tag "v${NEW_VERSION}"
+          git push origin main --tags
+
+      - name: Set up Docker Buildx
+        if: steps.bump.outputs.should_release == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: steps.bump.outputs.should_release == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image to GHCR
+        if: steps.bump.outputs.should_release == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.bump.outputs.new_version }}
+            ghcr.io/${{ github.repository }}:v${{ steps.bump.outputs.new_version }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Download and verify mcp-publisher CLI
+        if: steps.bump.outputs.should_release == 'true'
+        run: |
+          set -euo pipefail
+          MCP_PUBLISHER_VERSION="v1.8.1"
+          VERSION_NUMBER="${MCP_PUBLISHER_VERSION#v}"
+          os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          archive="mcp-publisher_${os}_${arch}.tar.gz"
+          checksums="registry_${VERSION_NUMBER}_checksums.txt"
+          base_url="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+
+          curl --fail --location --silent --show-error -O "${base_url}/${archive}"
+          curl --fail --location --silent --show-error -O "${base_url}/${checksums}"
+
+          sha256sum --check --ignore-missing "${checksums}"
+          tar -xzf "${archive}" mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Validate server.json against MCP Registry
+        if: steps.bump.outputs.should_release == 'true'
+        run: ./mcp-publisher validate server.json
+
       - name: Login to MCP Registry via GitHub OIDC
+        if: steps.bump.outputs.should_release == 'true'
         run: ./mcp-publisher login github-oidc
 
       - name: Publish server.json to MCP Registry
+        if: steps.bump.outputs.should_release == 'true'
         run: ./mcp-publisher publish server.json
+
+      - name: Create GitHub Release
+        if: steps.bump.outputs.should_release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.bump.outputs.new_version }}" --generate-notes

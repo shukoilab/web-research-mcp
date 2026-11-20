@@ -9,7 +9,6 @@ RUN pnpm run build
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-ENV BROWSER_DISPLAY=:99
 
 # Install system dependencies: Xvfb, fonts, ca-certificates, curl, gnupg, and procps
 RUN apt-get update && apt-get install -y --no-install-recommends \
