@@ -149,6 +149,8 @@ jobs:
             ghcr.io/${{ github.repository }}:${{ steps.bump.outputs.new_version }}
             ghcr.io/${{ github.repository }}:v${{ steps.bump.outputs.new_version }}
             ghcr.io/${{ github.repository }}:latest
+          labels: |
+            io.modelcontextprotocol.server.name=io.github.shukoilab/web-research-mcp
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
