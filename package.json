@@ -1,6 +1,6 @@
 {
   "name": "@shukoi/web-research-mcp",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Enterprise-grade, ultra-fast, and production-ready Web Research Model Context Protocol (MCP) server featuring undetectable stealth Google Search and token-efficient webpage content extraction.",
   "keywords": [
     "mcp",
