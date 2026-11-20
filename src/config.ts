@@ -91,7 +91,7 @@ export function resolveDefaultUserDataDir(
 export const config: ShukoiConfig = createDefaultConfig({
   observability: {
     serviceName: 'mcp-web-research',
-    serviceVersion: '1.1.0',
+    serviceVersion: '2.0.0',
   },
 });
 
