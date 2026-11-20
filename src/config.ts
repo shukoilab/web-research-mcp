@@ -26,9 +26,8 @@ export interface ProxyConfig {
  * @invariants Deeply frozen runtime object; immutable.
  */
 export interface WebResearchConfig {
-  readonly display?: string | undefined;
+  readonly port: number;
   readonly httpProxy?: string;
-  readonly headless: boolean;
   readonly browserTimeoutMs: number;
   readonly maxConcurrentPages: number;
   readonly maxContentLength: number;
@@ -62,44 +61,6 @@ export function parseProxyConfig(rawUrl?: string): ProxyConfig | undefined {
     username: parsed.username ? decodeURIComponent(parsed.username) : undefined,
     password: parsed.password ? decodeURIComponent(parsed.password) : undefined,
   };
-}
-
-/**
- * @purpose Resolves the default X11 display target based on the current operating system.
- * @rationale Linux server environments utilize Xvfb virtual framebuffers (e.g., :99), whereas macOS and Windows do not use X11 displays and must omit DISPLAY to prevent environment pollution.
- * @preconditions platform must be a valid NodeJS.Platform string identifier.
- * @param platform Operating system platform (defaults to process.platform).
- * @returns Resolved display string (e.g. ":99") on Linux, or undefined on non-Linux platforms.
- * @throws Never throws directly.
- * @invariants Pure function; Big-O time complexity O(1).
- */
-export function resolveDefaultDisplay(
-  platform: NodeJS.Platform = process.platform,
-): string | undefined {
-  if (platform !== 'linux') {
-    return undefined;
-  }
-  return process.env.BROWSER_DISPLAY || process.env.XVFB_DISPLAY || ':99';
-}
-
-/**
- * @purpose Resolves the default headless state adaptively across operating systems.
- * @rationale On Linux with Xvfb, running headless: false in RAM guarantees zero headless detection flags. On macOS and Windows lacking virtual displays, defaulting to headless: true prevents disruptive window pop-ups and focus stealing while preserving Patchright driver-level stealth.
- * @preconditions platform must be a valid NodeJS.Platform string; envHeadless is optional string override.
- * @param platform Operating system platform (defaults to process.platform).
- * @param envHeadless Optional explicit HEADLESS environment variable override.
- * @returns Boolean headless decision.
- * @throws Never throws directly.
- * @invariants Pure function; Big-O time complexity O(1).
- */
-export function resolveDefaultHeadless(
-  platform: NodeJS.Platform = process.platform,
-  envHeadless: string | undefined = process.env.HEADLESS,
-): boolean {
-  if (envHeadless !== undefined) {
-    return envHeadless === 'true';
-  }
-  return platform !== 'linux';
 }
 
 /**
@@ -140,9 +101,11 @@ export const config: ShukoiConfig = createDefaultConfig({
  * @invariants Readonly, immutable configuration object.
  */
 export const webResearchConfig: WebResearchConfig = Object.freeze({
-  display: resolveDefaultDisplay(),
+  port: Math.max(
+    1,
+    Math.min(65535, Number.parseInt(process.env.PORT || process.env.MCP_PORT || '3000', 10)),
+  ),
   httpProxy: process.env.HTTP_PROXY || process.env.http_proxy || undefined,
-  headless: resolveDefaultHeadless(),
   browserTimeoutMs: Math.max(1000, Number.parseInt(process.env.BROWSER_TIMEOUT_MS || '30000', 10)),
   maxConcurrentPages: Math.max(1, Number.parseInt(process.env.MAX_CONCURRENT_PAGES || '5', 10)),
   maxContentLength: Math.max(

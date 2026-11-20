@@ -33,23 +33,6 @@ export interface BrowserHealthMetrics {
 }
 
 /**
- * @purpose Resolves platform-specific Chromium command-line launch arguments.
- * @rationale Linux server environments without physical GPUs require Google SwiftShader CPU software rasterizer flags to produce authentic WebGL contexts, while macOS and Windows bind to native Metal and Direct3D11 hardware compositors.
- * @preconditions platform must be a valid NodeJS.Platform string.
- * @param platform Operating system platform (defaults to process.platform).
- * @returns Array of Chromium launch arguments.
- * @throws Never throws directly.
- * @invariants Pure function; Big-O time complexity O(1).
- */
-export function getPlatformChromiumArgs(platform: NodeJS.Platform = process.platform): string[] {
-  const baseArgs = ['--no-sandbox', '--disable-dev-shm-usage'];
-  if (platform === 'linux') {
-    return [...baseArgs, '--use-gl=angle', '--use-angle=swiftshader'];
-  }
-  return baseArgs;
-}
-
-/**
  * @purpose Granular configuration options parameterizing smart progressive scrolling and XHR hydration.
  * @rationale Permits per-request tuning of scroll delays, maximum iterations, and timeouts to adapt to varying network speeds and page depths.
  * @invariants Readonly options structure.
@@ -363,17 +346,15 @@ export class BrowserManager {
       try {
         fs.mkdirSync(webResearchConfig.userDataDir, { recursive: true });
         const proxy = parseProxyConfig(webResearchConfig.httpProxy);
-        const args = getPlatformChromiumArgs();
 
         const launched = await chromium.launchPersistentContext(webResearchConfig.userDataDir, {
           channel: 'chrome',
-          headless: webResearchConfig.headless,
+          headless: false,
           viewport: null,
           env: {
             ...process.env,
-            ...(webResearchConfig.display ? { DISPLAY: webResearchConfig.display } : {}),
+            DISPLAY: process.env.DISPLAY || ':99',
           },
-          args,
           proxy: proxy
             ? {
                 server: proxy.server,
@@ -452,7 +433,7 @@ export class BrowserManager {
       requestCount: this.requestCount,
       requestsSinceLastRecycle: this.requestsSinceLastRecycle,
       userDataDir: webResearchConfig.userDataDir,
-      display: webResearchConfig.display,
+      display: process.env.DISPLAY || ':99',
       memory: {
         heapUsedMb: Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100,
         rssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100,

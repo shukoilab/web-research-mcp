@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * @purpose Backpressure-safe, sterile STDIO transport entrypoint for local MCP agents.
  * @rationale Connects local agent environments (Claude Desktop, Cursor, OpenCode) directly to Shukoi actions over standard input/output pipes with redirected console stderr.

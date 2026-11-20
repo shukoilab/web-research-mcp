@@ -1,5 +1,5 @@
 {
-  "name": "mcp-web-research",
+  "name": "@shukoi/web-research-mcp",
   "version": "1.1.0",
   "description": "Enterprise-grade, ultra-fast, and production-ready Web Research Model Context Protocol (MCP) server featuring undetectable stealth Google Search and token-efficient webpage content extraction.",
   "keywords": [
@@ -33,12 +33,27 @@
   "license": "MIT",
   "author": "Shukoi Lab <https://github.com/shukoilab>",
   "type": "module",
+  "main": "./dist/entries/mcp-stdio.js",
+  "bin": {
+    "web-research-mcp": "./dist/entries/mcp-stdio.js",
+    "mcp-web-research": "./dist/entries/mcp-stdio.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "dev": "node --watch src/entries/selfhost.ts",
-    "start": "node dist/entries/selfhost.js",
+    "dev": "node --watch src/entries/mcp-http.ts",
+    "start": "node dist/entries/mcp-http.js",
+    "docker:build": "docker build -t ghcr.io/shukoilab/web-research-mcp:1.1.0 .",
+    "docker:run": "docker run -d -p 3000:3000 -e BROWSER_DISPLAY=:99 ghcr.io/shukoilab/web-research-mcp:1.1.0",
     "lint": "biome check .",
     "format": "biome format --write ."
   },

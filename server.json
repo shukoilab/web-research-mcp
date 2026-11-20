@@ -1,0 +1,135 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.shukoilab/web-research-mcp",
+  "title": "Web Research MCP Server",
+  "description": "Stealth Google Search and token-efficient web content extraction with undetected browser automation.",
+  "version": "1.1.0",
+  "websiteUrl": "https://github.com/shukoilab/web-research-mcp#readme",
+  "repository": {
+    "url": "https://github.com/shukoilab/web-research-mcp",
+    "source": "github",
+    "id": "1464441919"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/shukoilab/web-research-mcp:1.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PORT",
+          "description": "HTTP port for streamable MCP and health check endpoints (default: 3000)",
+          "isRequired": false,
+          "format": "number",
+          "default": "3000",
+          "isSecret": false
+        },
+        {
+          "name": "HTTP_PROXY",
+          "description": "Optional HTTP/HTTPS proxy URI (e.g. http://user:pass@host:port)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "BROWSER_USER_DATA_DIR",
+          "description": "Persistent directory storing Chrome profile, cookies, and cache",
+          "isRequired": false,
+          "format": "filepath",
+          "default": "~/.cache/mcp-web-research/chrome-profile",
+          "isSecret": false
+        },
+        {
+          "name": "BROWSER_TIMEOUT_MS",
+          "description": "Default navigation timeout in milliseconds",
+          "isRequired": false,
+          "format": "number",
+          "default": "30000",
+          "isSecret": false
+        },
+        {
+          "name": "MAX_CONCURRENT_PAGES",
+          "description": "Maximum simultaneous browser tabs allowed by semaphore",
+          "isRequired": false,
+          "format": "number",
+          "default": "5",
+          "isSecret": false
+        },
+        {
+          "name": "MAX_REQUESTS_BEFORE_RECYCLE",
+          "description": "Lifetime requests before background browser restart to prevent RAM fragmentation",
+          "isRequired": false,
+          "format": "number",
+          "default": "1000",
+          "isSecret": false
+        },
+        {
+          "name": "MAX_CONTENT_LENGTH",
+          "description": "Upper bound memory guard in bytes against massive HTML payloads",
+          "isRequired": false,
+          "format": "number",
+          "default": "5242880",
+          "isSecret": false
+        },
+        {
+          "name": "NETWORK_IDLE_TIMEOUT_MS",
+          "description": "Maximum wait time in ms for initial network stabilization before scrolling",
+          "isRequired": false,
+          "format": "number",
+          "default": "5000",
+          "isSecret": false
+        },
+        {
+          "name": "SCROLL_DELAY_MS",
+          "description": "Debounce delay in ms after each scroll and semantic unfolding step",
+          "isRequired": false,
+          "format": "number",
+          "default": "500",
+          "isSecret": false
+        },
+        {
+          "name": "SCROLL_STEP_PX",
+          "description": "Distance in pixels per scroll increment",
+          "isRequired": false,
+          "format": "number",
+          "default": "1000",
+          "isSecret": false
+        },
+        {
+          "name": "SCROLL_SETTLE_TIMEOUT_MS",
+          "description": "Final quiet period in ms after scroll loop completes",
+          "isRequired": false,
+          "format": "number",
+          "default": "500",
+          "isSecret": false
+        },
+        {
+          "name": "MAX_SCROLL_STEPS",
+          "description": "Maximum scroll iterations for lazy content hydration and DOM convergence",
+          "isRequired": false,
+          "format": "number",
+          "default": "6",
+          "isSecret": false
+        },
+        {
+          "name": "SEARCH_WAIT_TIMEOUT_MS",
+          "description": "Maximum wait time in ms for Google SERP cards to render before parsing results",
+          "isRequired": false,
+          "format": "number",
+          "default": "10000",
+          "isSecret": false
+        },
+        {
+          "name": "READABILITY_CHAR_THRESHOLD",
+          "description": "Minimum character length for Mozilla Readability article scoring",
+          "isRequired": false,
+          "format": "number",
+          "default": "20",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

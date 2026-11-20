@@ -1,18 +1,45 @@
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
-RUN npm install -g pnpm
+RUN npm install -g pnpm@10
 COPY package.json pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build
 
-FROM node:22-alpine AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-RUN npm install -g pnpm
+ENV BROWSER_DISPLAY=:99
+
+# Install system dependencies: Xvfb, fonts, ca-certificates, curl, gnupg, and procps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    ca-certificates \
+    curl \
+    gnupg \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install official Google Chrome Stable from Google's Linux repository
+RUN curl -fSsL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pnpm and production dependencies
+RUN npm install -g pnpm@10
 COPY --from=builder /app/package.json /app/pnpm-lock.yaml* ./
 COPY --from=builder /app/dist ./dist
-RUN pnpm install --prod --frozen-lockfile
-USER node
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh \
+    && pnpm install --prod --frozen-lockfile
+
+# Prepare persistent chrome profile directory
+RUN mkdir -p /root/.cache/mcp-web-research/chrome-profile
+
 EXPOSE 3000
-CMD ["node", "dist/entries/selfhost.js"]
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["node", "dist/entries/mcp-http.js"]

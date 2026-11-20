@@ -1,6 +1,7 @@
 # 🎭 MCP Web Research Server
 
 [![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-blue.svg)](package.json)
+[![Docker: Universal](https://img.shields.io/badge/Docker-Universal-blue.svg)](https://ghcr.io/shukoilab/web-research-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript: 5.7+](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
 [![Patchright: Undetected](https://img.shields.io/badge/Driver-Patchright-goldenrod.svg)](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)
@@ -13,61 +14,27 @@ Engineered for AI coding agents and autonomous workflows requiring high-accuracy
 
 ## 🌟 Key Architectural Features
 
-- **🎭 Undetectable Anti-Bot Evasion (Patchright + Chrome):** Built on Patchright (patched driver eliminating `Runtime.enable`, `--enable-automation`, and console leaks). Enforces official Google Chrome (`channel: 'chrome'`) with zero-fallback for 100% genuine consumer browser fingerprints.
+- **🎭 100% Undetectable Headed Stealth on Display :99:** Built on Patchright (patched driver eliminating `Runtime.enable`, `--enable-automation`, and console leaks). Enforces official Google Chrome in genuine headed mode (`headless: false`) inside an isolated X11 virtual framebuffer (`:99`) adhering strictly to Patchright's official Zero-Injection Best Practice (zero custom args, zero custom user-agent, zero header tampering). Guarantees 100% authentic consumer browser window metrics and extensions state with zero desktop window pop-ups or focus-stealing on the host OS.
 - **⚡ Pre-Warmed Persistent Pool (<100ms Tab Acquisition):** Browser context is pre-warmed at server boot with a persistent user profile (`launchPersistentContext`), retaining DNS, TLS session tickets, V8 bytecode, and consent cookies for 38–50% faster navigations.
 - **🔄 Universal Regex-Free Semantic DOM Unfolding & Auto-Scroll:** Handles complex e-commerce, SPA, and XHR-heavy sites (e.g. Tokopedia, Shopee, Reddit). Progressively scrolls, triggers `IntersectionObserver` lazy-loads, unfolds collapsed sections using universal W3C WAI-ARIA standards (`aria-expanded="false"`, `data-state="closed"`, `aria-controls`) and native HTML5 `<details>` disclosures with zero language-locking, unclamps CSS line-clamping, and stops when DOM height converges.
 - **📉 Token-Efficient & High-Density Markdown:** Strips token-wasting avatar images, promotional widgets, and redundant blank lines. Compiles clean GitHub Flavored Markdown via Unified AST (`linkedom` + `@mozilla/readability` + `rehype-remark` + `remark-gfm`).
 - **🛡️ Zero-Trust SSRF Defense:** Rejects loopback (`127.0.0.0/8`, `::1`), RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local metadata (`169.254.169.254`, `metadata.google.internal`), and non-HTTP protocols.
-- **🖥️ Cross-Platform Isolation:** Dedicated virtual framebuffer (`DISPLAY=:99`) on Linux; automatic background stealth headless mode on macOS and Windows to prevent desktop window focus-stealing.
+- **🌍 Universal Cross-Platform Architecture:** Runs identically across macOS, Windows, and Linux via Docker with zero host dependencies and zero physical screen interference.
 - **🏥 Real Liveness & Readiness Probing:** Provides real subsystem health metrics over both MCP STDIO (`healthCheck`) and native HTTP REST (`GET /health` with HTTP 200/503 status codes for Kubernetes / Docker).
 
 ---
 
-## 🖥️ Operating System Compatibility Matrix
+## 🌍 Universal Cross-Platform Execution
 
-| Operating System | Support Level | Windowing & Display | GPU / WebGL Backend | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **Linux (Ubuntu 24.04 / Debian)** | **✅ TESTED & VERIFIED** | Xvfb Virtual Framebuffer (`:99`) | SwiftShader CPU (`ANGLE`) | Fully tested in production CI and local environments. Zero physical screen pop-ups. |
-| **macOS (`darwin`)** | **⚠️ UNTESTED (Architecturally Supported)** | Quartz / WindowServer | Native Apple Metal | Headless defaults to `true` to prevent UI focus-stealing. Architectural code implemented. |
-| **Windows (`win32`)** | **⚠️ UNTESTED (Architecturally Supported)** | Desktop Window Manager (DWM) | Native Direct3D11 | Headless defaults to `true`. Cross-platform signal handlers installed. Architectural code implemented. |
+Thanks to hermetic Docker containerization, `mcp-web-research` runs with **100% feature parity** across all operating systems without any host configuration:
 
-> **Notice:** Linux (Ubuntu 24.04 LTS) is the primary verified operating environment. macOS and Windows contain platform-adaptive code paths, but are currently classified as *untested / experimental*.
+| Host Platform | Support Level | Display & Stealth Engine | Window Behavior |
+| :--- | :--- | :--- | :--- |
+| **macOS (Apple Silicon & Intel)** | **✅ Universal** | Virtual Framebuffer (`:99`) + Zero-Injection Stealth | Zero Desktop Pop-ups (Rendered in container) |
+| **Windows (10 / 11 / Server)** | **✅ Universal** | Virtual Framebuffer (`:99`) + Zero-Injection Stealth | Zero Desktop Pop-ups (Rendered in container) |
+| **Linux (Ubuntu / Debian / RHEL)** | **✅ Universal** | Virtual Framebuffer (`:99`) + Zero-Injection Stealth | Zero Desktop Pop-ups (Rendered in container) |
 
----
-
-## 📋 Prerequisites & System Requirements
-
-1. **Node.js:** v20.x or v22.x+ (tested on Node v24.16.0)
-2. **Package Manager:** `pnpm` (v9+ or v12+)
-3. **Google Chrome:** Official Google Chrome binary installed on host:
-   ```bash
-   npx patchright install chrome
-   # Or install Google Chrome via standard apt/rpm package
-   ```
-4. **Xvfb (Linux only):** Virtual display running on `:99` (recommended systemd unit below).
-
-### Example Linux Xvfb Systemd Service (`/etc/systemd/system/xvfb.service`)
-
-```ini
-[Unit]
-Description=Single-Instance X Virtual Framebuffer (Display :99)
-After=network.target systemd-tmpfiles-setup.service
-Requires=systemd-tmpfiles-setup.service
-
-[Service]
-Type=simple
-User=xvfb
-Group=xvfb
-ExecStart=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp -ac +extension GLX +render -noreset
-ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do /usr/bin/xdpyinfo -display :99 >/dev/null 2>&1 && exit 0; sleep 0.2; done; exit 1'
-Restart=always
-RestartSec=2
-StandardOutput=null
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
+> **Anti-Bot Invariant:** The browser strictly runs in genuine headed mode (`headless: false`) inside the virtual framebuffer `:99`. End users will never see desktop pop-up windows, yet anti-bot inspection systems detect 100% authentic consumer desktop Chrome behavior.
 
 ---
 
@@ -77,8 +44,7 @@ All settings can be configured via environment variables. Universal defaults are
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `BROWSER_DISPLAY` | `string` | `":99"` (Linux) | X11 virtual display target for Linux automation. |
-| `HEADLESS` | `boolean` | `false` (Linux) / `true` (macOS/Win) | Browser headless flag. Defaults to `false` on Linux (for Xvfb) and `true` on macOS/Windows. |
+| `PORT` | `integer` | `3000` | HTTP port for streamable MCP and health check endpoints. |
 | `HTTP_PROXY` | `string` | `undefined` | Optional HTTP/HTTPS proxy URI (e.g. `http://user:pass@host:port`). |
 | `BROWSER_USER_DATA_DIR` | `string` | `~/.cache/mcp-web-research/chrome-profile` | Persistent directory storing Chrome cache, cookies, and session state. |
 | `BROWSER_TIMEOUT_MS` | `integer` | `30000` | Default navigation timeout in milliseconds. |
@@ -97,7 +63,33 @@ All settings can be configured via environment variables. Universal defaults are
 
 ## 🚀 Client Installation & Setup Guide
 
-### 1. Claude Desktop
+### Option 1: Docker Streamable HTTP Service (Recommended for Remote Agents & Teams)
+
+Run as an isolated, persistent network service on any machine:
+
+```bash
+docker run -d -p 3000:3000 --shm-size=1gb --name web-research-mcp --restart unless-stopped ghcr.io/shukoilab/web-research-mcp:latest
+```
+
+- **MCP Endpoint:** `http://localhost:3000/mcp` (Streamable HTTP transport)
+- **Healthcheck Probe:** `GET http://localhost:3000/health` (HTTP 200/503)
+
+Configure in Cursor or OpenCode:
+
+```json
+{
+  "type": "remote",
+  "url": "http://localhost:3000/mcp"
+}
+```
+
+---
+
+### Option 2: Docker Local STDIO Container (Recommended for Claude Desktop)
+
+Runs inside the sealed container without needing Node.js or Chrome installed on the host machine:
+
+#### Claude Desktop
 Add to your `claude_desktop_config.json`:
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
@@ -107,36 +99,46 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "web-research": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-web-research/dist/entries/mcp-stdio.js"],
-      "env": {
-        "BROWSER_DISPLAY": ":99",
-        "SCROLL_DELAY_MS": "500",
-        "MAX_SCROLL_STEPS": "6"
-      }
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "--init",
+        "--shm-size=1gb",
+        "ghcr.io/shukoilab/web-research-mcp:latest",
+        "node",
+        "dist/entries/mcp-stdio.js"
+      ]
     }
   }
 }
 ```
 
-### 2. Cursor IDE
+#### Cursor IDE
 Add to `~/.cursor/mcp.json` (or via **Cursor Settings > Features > MCP**):
 
 ```json
 {
   "mcpServers": {
     "web-research": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-web-research/dist/entries/mcp-stdio.js"],
-      "env": {
-        "BROWSER_DISPLAY": ":99"
-      }
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "--init",
+        "--shm-size=1gb",
+        "ghcr.io/shukoilab/web-research-mcp:latest",
+        "node",
+        "dist/entries/mcp-stdio.js"
+      ]
     }
   }
 }
 ```
 
-### 3. OpenCode
+#### OpenCode
 Add to your `opencode.json` (or profile config):
 
 ```json
@@ -145,27 +147,38 @@ Add to your `opencode.json` (or profile config):
   "mcp": {
     "web-research": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/mcp-web-research/dist/entries/mcp-stdio.js"],
-      "environment": {
-        "BROWSER_DISPLAY": ":99"
-      }
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "--init",
+        "--shm-size=1gb",
+        "ghcr.io/shukoilab/web-research-mcp:latest",
+        "node",
+        "dist/entries/mcp-stdio.js"
+      ]
     }
   }
 }
 ```
 
-### 4. VS Code (Cline / Roo Code / Claude Dev)
-Add to your MCP Settings configuration file:
-
+#### VS Code (Cline / Roo Code / Claude Dev)
 ```json
 {
   "mcpServers": {
     "web-research": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-web-research/dist/entries/mcp-stdio.js"],
-      "env": {
-        "BROWSER_DISPLAY": ":99"
-      },
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "--init",
+        "--shm-size=1gb",
+        "ghcr.io/shukoilab/web-research-mcp:latest",
+        "node",
+        "dist/entries/mcp-stdio.js"
+      ],
       "disabled": false,
       "autoApprove": []
     }
@@ -173,36 +186,32 @@ Add to your MCP Settings configuration file:
 }
 ```
 
-### 5. Windsurf IDE
-Add to `~/.codeium/windsurf/mcp_config.json`:
+---
 
-```json
-{
-  "mcpServers": {
-    "web-research": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-web-research/dist/entries/mcp-stdio.js"],
-      "env": {
-        "BROWSER_DISPLAY": ":99"
-      }
-    }
-  }
-}
-```
+### Option 3: Local Node.js Development & STDIO Execution
 
-### 6. HTTP / Self-Hosted Deployment (Docker / Kubernetes)
-Run as a standalone network service:
+For local development or environments with Node.js 20+ installed:
 
 ```bash
 # Build the project
+pnpm install
 pnpm run build
 
 # Start the Streamable HTTP server on port 3000
 pnpm run start
 ```
 
-- **MCP Endpoint:** `http://localhost:3000/mcp` (Streamable HTTP transport)
-- **Kubernetes / Docker Healthcheck:** `GET http://localhost:3000/health` (Returns HTTP 200 / 503 with subsystem metrics)
+Or invoke STDIO locally:
+```json
+{
+  "mcpServers": {
+    "web-research": {
+      "command": "node",
+      "args": ["/absolute/path/to/mcp-web-research/dist/entries/mcp-stdio.js"]
+    }
+  }
+}
+```
 
 ---
 

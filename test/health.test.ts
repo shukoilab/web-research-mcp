@@ -1,7 +1,7 @@
 import { createActionTestHarness } from '@shukoi/core/testing';
 import { describe, expect, it } from 'vitest';
 import { healthAction } from '../src/actions/health.js';
-import { app } from '../src/entries/selfhost.js';
+import { app } from '../src/entries/mcp-http.js';
 
 describe('healthAction Real Liveness & Readiness Probe', () => {
   it('returns comprehensive subsystem health, browser metrics, and memory statistics', async () => {

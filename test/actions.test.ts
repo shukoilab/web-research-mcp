@@ -61,15 +61,42 @@ describe('Shukoi Action Tri-Transport Parity & Contracts', () => {
     });
 
     it('executes google search and returns structured results array', async () => {
-      const result = await harness.execute(googleSearchAction, {
-        query: 'open source AI',
-        limit: 5,
+      const bm = BrowserManager.getInstance();
+      const ctx = await bm.getContext();
+      const mockSerpHtml = `
+        <html>
+          <body>
+            <div class="g">
+              <h3><a href="https://opensource.org/ai"><cite>https://opensource.org > ai</cite>Open Source AI</a></h3>
+              <div class="VwiC3b">Open Source AI definition, principles, and guidelines.</div>
+            </div>
+          </body>
+        </html>
+      `;
+      await ctx.route('**/search?*', async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/html',
+          body: mockSerpHtml,
+        });
       });
-      expect(result.query).toBe('open source AI');
-      expect(Array.isArray(result.results)).toBe(true);
-      expect(result.totalReturned).toBeGreaterThanOrEqual(1);
-      expect(result.results[0]?.title).toBeDefined();
-      expect(result.results[0]?.url).toBeDefined();
+
+      try {
+        const result = await harness.execute(googleSearchAction, {
+          query: 'open source AI',
+          limit: 5,
+        });
+
+        expect(result.query).toBe('open source AI');
+        expect(Array.isArray(result.results)).toBe(true);
+        expect(result.totalReturned).toBe(1);
+        expect(result.results.length).toBe(1);
+        expect(result.results[0]?.title).toContain('Open Source AI');
+        expect(result.results[0]?.url).toBe('https://opensource.org/ai');
+        expect(result.results[0]?.snippet).toContain('Open Source AI definition');
+      } finally {
+        await ctx.unroute('**/search?*');
+      }
     }, 25000);
   });
 
