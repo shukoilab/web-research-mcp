@@ -1,6 +1,6 @@
 # 🎭 MCP Web Research Server
 
-[![Version: 2.0.1](https://img.shields.io/badge/Version-2.0.1-blue.svg)](package.json)
+[![Version: 2.0.2](https://img.shields.io/badge/Version-2.0.2-blue.svg)](package.json)
 [![Docker: Universal](https://img.shields.io/badge/Docker-Universal-blue.svg)](https://ghcr.io/shukoilab/web-research-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript: 5.7+](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
