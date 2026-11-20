@@ -71,6 +71,8 @@ Run as an isolated, persistent network service on any machine:
 docker run -d -p 3000:3000 --shm-size=1gb --name web-research-mcp --restart unless-stopped ghcr.io/shukoilab/web-research-mcp:latest
 ```
 
+> **Tip on Custom Host Ports:** If port 3000 is occupied on your host, forward your desired host port to container port 3000 (e.g. `-p 3031:3000`), or override the internal port via environment variable (e.g. `-p 3031:3031 -e PORT=3031`).
+
 - **MCP Endpoint:** `http://localhost:3000/mcp` (Streamable HTTP transport)
 - **Healthcheck Probe:** `GET http://localhost:3000/health` (HTTP 200/503)
 
@@ -217,7 +219,7 @@ Or invoke STDIO locally:
 
 ## 🛠️ MCP Tools Catalog
 
-### 1. `google_search` (`googleSearchAction`)
+### 1. `googleSearch` (`googleSearchAction`)
 Executes organic web search on Google using stealth Chrome with automatic consent dialog bypass, breadcrumb canonicalization, and rich snippet extraction. Acts as Step 1 (Discovery & Triage) in agent research workflows, returning candidate URLs and preview snippets.
 
 **Input Parameters:**
@@ -246,11 +248,11 @@ Executes organic web search on Google using stealth Chrome with automatic consen
 
 ---
 
-### 2. `web_extract` (`webExtractAction`)
-Navigates to any target URL, executes intelligent progressive scrolling to trigger lazy XHR/SPA content (prices, reviews, specs), unfolds collapsed content using universal W3C ARIA standards and native HTML5 disclosures, unclamps visual CSS line-clamping, and serializes clean GitHub Flavored Markdown. Acts as Step 2 (Deep Content Reader) following `google_search` or as Step 1 for direct URLs.
+### 2. `webExtract` (`webExtractAction`)
+Navigates to any target URL, executes intelligent progressive scrolling to trigger lazy XHR/SPA content (prices, reviews, specs), unfolds collapsed content using universal W3C ARIA standards and native HTML5 disclosures, unclamps visual CSS line-clamping, and serializes clean GitHub Flavored Markdown. Acts as Step 2 (Deep Content Reader) following `googleSearch` or as Step 1 for direct URLs.
 
 **Input Parameters:**
-- `url` (*string, required, format: "uri", 1..2048 chars*): Target website URL (`http://` or `https://`). Accepts direct URLs or canonical URLs discovered via `google_search`.
+- `url` (*string, required, format: "uri", 1..2048 chars*): Target website URL (`http://` or `https://`). Accepts direct URLs or canonical URLs discovered via `googleSearch`.
 - `smartScroll` (*boolean, optional, default: true*): Enable automated progressive scroll, semantic unfolding, and XHR stabilization.
 - `scrollDelayMs` (*integer, optional, 100..5000, default: 500*): Debounce wait time in milliseconds after each scroll step (increase to 1000–2000ms for slow networks).
 - `maxScrolls` (*integer, optional, 0..20, default: 6*): Maximum scroll step iterations for lazy content hydration and DOM convergence.
@@ -302,7 +304,7 @@ Inspects real-time subsystem readiness, browser pool connectivity, active concur
 Run the full automated verification pipeline:
 
 ```bash
-# Execute unit and live integration tests (56+ tests)
+# Execute unit and live integration tests (68+ tests)
 pnpm test
 
 # Verify strict TypeScript type-safety (0 errors)
@@ -322,13 +324,13 @@ pnpm run build
 This project is built on top of an incredible open-source ecosystem. Sincere gratitude and credits go to the creators and maintainers of the following foundations:
 
 - **[Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)** — Undetected browser automation driver eliminating CDP leaks, `--enable-automation`, and runtime flags for genuine consumer fingerprints.
-- **[Shukoi Framework](https://github.com/shukoilab/shukoi)** (`@shukoi/core`, `@shukoi/mcp`, `@shukoi/selfhost`) — Modular TypeScript runtime framework powering MCP action dispatching and self-hosted HTTP server lifecycles.
+- **[Shukoi Framework](https://github.com/shukoilab/shukoi)** (`@shukoi/core`, `@shukoi/mcp`) — Modular TypeScript runtime framework powering MCP action dispatching and Web-Standard transport.
+- **[Hono](https://hono.dev)** (`hono`, `@hono/node-server`) — Ultra-fast, lightweight Web-Standard HTTP framework powering Streamable HTTP transport and native health probes.
 - **[Model Context Protocol SDK](https://github.com/modelcontextprotocol/typescript-sdk)** — Official TypeScript SDK implementing the MCP specification across STDIO and Streamable HTTP transports.
 - **[Mozilla Readability](https://github.com/mozilla/readability)** — Standalone content extraction engine from Mozilla Firefox's Reader View for clean, token-efficient article parsing.
 - **[LinkeDOM](https://github.com/WebReflection/linkedom)** — High-performance, lightweight server-side DOM implementation with near-zero memory footprint.
 - **[Unified Ecosystem](https://unifiedjs.com/)** (`unified`, `rehype-parse`, `rehype-remark`, `remark-gfm`, `remark-stringify`) — Composable syntax tree (AST) pipeline transforming HTML into high-density GitHub Flavored Markdown.
 - **[TypeBox](https://github.com/sinclairzx81/typebox)** — High-performance JSON Schema Type Builder with static type inference enforcing strict input/output contracts.
-- **[Hono](https://hono.dev/)** — Ultrafast, lightweight web framework driving native HTTP REST and Kubernetes health check endpoints.
 - **[jose](https://github.com/panva/jose)** — Universal Web Cryptography library for secure token validation and cryptographic operations.
 - **[Biome](https://biomejs.dev/) & [Vitest](https://vitest.dev/)** — Modern development toolchains delivering blazing-fast linting, formatting, and automated testing.
 

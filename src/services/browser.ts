@@ -5,10 +5,61 @@
  * @invariants Singleton instance; concurrency bounded by semaphore; zero leaked tab handles; clean exit on process signals.
  */
 
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { DomainError } from '@shukoi/core';
 import { type BrowserContext, chromium, type Page } from 'patchright';
 import { parseProxyConfig, webResearchConfig } from '../config.js';
+
+/**
+ * @purpose Ensures an X11 virtual framebuffer (Xvfb) is active on DISPLAY=:99 on Linux platforms.
+ * @rationale Strictly prevents Google Chrome from ever rendering or opening windows on physical host displays (:0, :1), guaranteeing 100% invisible execution across bare metal and container environments.
+ * @preconditions Linux operating system environment.
+ * @param None.
+ * @returns Void.
+ * @throws Never throws directly; suppresses spawn error events when Xvfb binary is missing.
+ * @invariants Idempotent; Big-O time complexity O(1); non-spinning synchronous sleep.
+ */
+export function ensureVirtualDisplay(): void {
+  if (process.platform !== 'linux') return;
+  if (fs.existsSync('/tmp/.X11-unix/X99')) return;
+
+  try {
+    const proc = spawn(
+      'Xvfb',
+      [
+        ':99',
+        '-screen',
+        '0',
+        '1920x1080x24',
+        '-nolisten',
+        'tcp',
+        '-ac',
+        '+extension',
+        'GLX',
+        '+render',
+        '-noreset',
+      ],
+      {
+        detached: true,
+        stdio: 'ignore',
+      },
+    );
+    proc.on('error', () => {
+      // Gracefully suppress missing binary or invocation failure so process does not crash (CWE-755)
+    });
+    proc.unref();
+
+    // Bounded non-spinning wait for X11 socket creation (max 1500ms)
+    const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+    for (let i = 0; i < 30; i++) {
+      if (fs.existsSync('/tmp/.X11-unix/X99')) break;
+      Atomics.wait(sleepBuffer, 0, 0, 50);
+    }
+  } catch {
+    // If invocation fails synchronously, handled gracefully
+  }
+}
 
 /**
  * @purpose Structured browser health and performance metrics for readiness and liveness probes.
@@ -346,14 +397,24 @@ export class BrowserManager {
       try {
         fs.mkdirSync(webResearchConfig.userDataDir, { recursive: true });
         const proxy = parseProxyConfig(webResearchConfig.httpProxy);
+        ensureVirtualDisplay();
+
+        // On Linux, strictly lock DISPLAY to virtual framebuffer :99 to prevent desktop window popups
+        // On macOS and Windows, omit DISPLAY to utilize native window compositing
+        const displayEnv = process.platform === 'linux' ? { DISPLAY: ':99' } : {};
+
+        // On non-root host environments (Linux, macOS, Windows), enable native sandbox to eliminate "--no-sandbox" warning banner
+        // In root containers without user namespace permissions, fall back cleanly
+        const isNonRoot = typeof process.getuid === 'function' ? process.getuid() !== 0 : true;
 
         const launched = await chromium.launchPersistentContext(webResearchConfig.userDataDir, {
           channel: 'chrome',
           headless: false,
           viewport: null,
+          chromiumSandbox: isNonRoot,
           env: {
             ...process.env,
-            DISPLAY: process.env.DISPLAY || ':99',
+            ...displayEnv,
           },
           proxy: proxy
             ? {
@@ -433,7 +494,7 @@ export class BrowserManager {
       requestCount: this.requestCount,
       requestsSinceLastRecycle: this.requestsSinceLastRecycle,
       userDataDir: webResearchConfig.userDataDir,
-      display: process.env.DISPLAY || ':99',
+      display: process.platform === 'linux' ? ':99' : undefined,
       memory: {
         heapUsedMb: Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100,
         rssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100,

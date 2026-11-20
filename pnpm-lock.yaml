@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@hono/node-server':
+        specifier: ^2.1.9
+        version: 2.1.9(hono@4.13.19)
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
@@ -20,9 +23,6 @@ importers:
       '@shukoi/mcp':
         specifier: ^1.0.4
         version: 1.0.4(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@sinclair/typebox@0.34.52)(hono@4.13.19)
-      '@shukoi/selfhost':
-        specifier: ^1.0.4
-        version: 1.0.4(@sinclair/typebox@0.34.52)(hono@4.13.19)
       '@sinclair/typebox':
         specifier: ^0.34.52
         version: 0.34.52
@@ -477,15 +477,6 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
       hono:
-        optional: true
-
-  '@shukoi/selfhost@1.0.4':
-    resolution: {integrity: sha512-8O/8eiEZCBqnpEBDVIbUHzOzvDtLuR20mt+jrSsjW4yFzp6JR8EMghdvtFWCu/keu1JsPur8+A1sqgVcAhez0g==}
-    peerDependencies:
-      '@hono/node-server': ^1.13.8
-      hono: ^4.7.0
-    peerDependenciesMeta:
-      '@hono/node-server':
         optional: true
 
   '@sinclair/typebox@0.34.52':
@@ -1744,13 +1735,6 @@ snapshots:
       '@shukoi/core': 1.0.4(@sinclair/typebox@0.34.52)
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.32.2(zod@4.6.7)
-      hono: 4.13.19
-    transitivePeerDependencies:
-      - '@sinclair/typebox'
-
-  '@shukoi/selfhost@1.0.4(@sinclair/typebox@0.34.52)(hono@4.13.19)':
-    dependencies:
-      '@shukoi/core': 1.0.4(@sinclair/typebox@0.34.52)
       hono: 4.13.19
     transitivePeerDependencies:
       - '@sinclair/typebox'

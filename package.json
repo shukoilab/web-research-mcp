@@ -59,11 +59,11 @@
     "format": "biome format --write ."
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.9",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@mozilla/readability": "^0.6.0",
     "@shukoi/core": "^1.0.4",
     "@shukoi/mcp": "^1.0.4",
-    "@shukoi/selfhost": "^1.0.4",
     "@sinclair/typebox": "^0.34.52",
     "hono": "^4.7.0",
     "jose": "^5.9.6",
