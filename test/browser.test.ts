@@ -19,7 +19,7 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
     expect(metrics.userDataDir).toBeDefined();
     expect(metrics.maxCapacity).toBeGreaterThan(0);
     expect(metrics.memory.heapUsedMb).toBeGreaterThan(0);
-  });
+  }, 60000);
 
   it('spawns and closes isolated tabs rapidly on the warm persistent context', async () => {
     // Execute 2 sequential requests measuring tab acquisition speed

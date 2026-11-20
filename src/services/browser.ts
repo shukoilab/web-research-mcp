@@ -62,6 +62,30 @@ export function ensureVirtualDisplay(): void {
 }
 
 /**
+ * @purpose Resolves the active or required X11 display string on Linux or returns undefined on non-Linux platforms.
+ * @rationale Reuses existing virtual displays (such as those allocated by xvfb-run or container entrypoints) to prevent dual-daemon clashing, while isolating physical desktop displays (:0, :1) or unset environments to virtual display :99.
+ * @preconditions None.
+ * @param None.
+ * @returns Target DISPLAY string (e.g. ':99', ':100') on Linux, or undefined on macOS and Windows.
+ * @throws Never throws directly.
+ * @invariants Pure read/spawn coordination; idempotent; Big-O time complexity O(1).
+ */
+export function resolveDisplay(): string | undefined {
+  if (process.platform !== 'linux') return undefined;
+
+  const currentDisplay = process.env.DISPLAY;
+  if (currentDisplay && currentDisplay !== ':0' && currentDisplay !== ':1') {
+    if (currentDisplay === ':99') {
+      ensureVirtualDisplay();
+    }
+    return currentDisplay;
+  }
+
+  ensureVirtualDisplay();
+  return ':99';
+}
+
+/**
  * @purpose Structured browser health and performance metrics for readiness and liveness probes.
  * @rationale Informs orchestration monitors and AI agents of real browser subsystem status, tab concurrency, and memory consumption.
  * @invariants Readonly telemetry structure.
@@ -397,21 +421,20 @@ export class BrowserManager {
       try {
         fs.mkdirSync(webResearchConfig.userDataDir, { recursive: true });
         const proxy = parseProxyConfig(webResearchConfig.httpProxy);
-        ensureVirtualDisplay();
+        const targetDisplay = resolveDisplay();
+        const displayEnv = targetDisplay ? { DISPLAY: targetDisplay } : {};
 
-        // On Linux, strictly lock DISPLAY to virtual framebuffer :99 to prevent desktop window popups
-        // On macOS and Windows, omit DISPLAY to utilize native window compositing
-        const displayEnv = process.platform === 'linux' ? { DISPLAY: ':99' } : {};
-
-        // On non-root host environments (Linux, macOS, Windows), enable native sandbox to eliminate "--no-sandbox" warning banner
-        // In root containers without user namespace permissions, fall back cleanly
+        // On non-root host environments (Linux, macOS, Windows) outside CI, enable native sandbox to eliminate "--no-sandbox" warning banner
+        // In CI runners or root containers without user namespace permissions, fall back cleanly for speed and stability
         const isNonRoot = typeof process.getuid === 'function' ? process.getuid() !== 0 : true;
+        const useSandbox = !process.env.CI && isNonRoot;
 
         const launched = await chromium.launchPersistentContext(webResearchConfig.userDataDir, {
           channel: 'chrome',
           headless: false,
           viewport: null,
-          chromiumSandbox: isNonRoot,
+          chromiumSandbox: useSandbox,
+          timeout: Math.max(60000, webResearchConfig.browserTimeoutMs),
           env: {
             ...process.env,
             ...displayEnv,
@@ -494,7 +517,7 @@ export class BrowserManager {
       requestCount: this.requestCount,
       requestsSinceLastRecycle: this.requestsSinceLastRecycle,
       userDataDir: webResearchConfig.userDataDir,
-      display: process.platform === 'linux' ? ':99' : undefined,
+      display: resolveDisplay(),
       memory: {
         heapUsedMb: Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100,
         rssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100,

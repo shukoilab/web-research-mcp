@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ensureVirtualDisplay } from '../src/services/browser.js';
+import { ensureVirtualDisplay, resolveDisplay } from '../src/services/browser.js';
 
 describe('Cross-Platform Configuration & Invariants', () => {
   describe('Virtual Display Invariants & Multi-OS Architecture', () => {
@@ -12,8 +12,44 @@ describe('Cross-Platform Configuration & Invariants', () => {
       try {
         Object.defineProperty(process, 'platform', { value: 'darwin' });
         expect(() => ensureVirtualDisplay()).not.toThrow();
+        expect(resolveDisplay()).toBeUndefined();
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform });
+      }
+    });
+
+    it('resolves virtual display dynamically preserving custom/xvfb-run displays and isolating physical desktops', () => {
+      const originalPlatform = process.platform;
+      const originalDisplay = process.env.DISPLAY;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+
+        // Preserves custom virtual display from xvfb-run (e.g. :100)
+        process.env.DISPLAY = ':100';
+        expect(resolveDisplay()).toBe(':100');
+
+        // Redirects physical desktop display :0 to :99
+        process.env.DISPLAY = ':0';
+        expect(resolveDisplay()).toBe(':99');
+
+        // Redirects physical desktop display :1 to :99
+        process.env.DISPLAY = ':1';
+        expect(resolveDisplay()).toBe(':99');
+
+        // Preserves virtual display :99
+        process.env.DISPLAY = ':99';
+        expect(resolveDisplay()).toBe(':99');
+
+        // Defaults to :99 when unset
+        delete process.env.DISPLAY;
+        expect(resolveDisplay()).toBe(':99');
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+        if (originalDisplay !== undefined) {
+          process.env.DISPLAY = originalDisplay;
+        } else {
+          delete process.env.DISPLAY;
+        }
       }
     });
   });
