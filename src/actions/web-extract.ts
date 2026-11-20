@@ -25,14 +25,14 @@ if (!FormatRegistry.Has('uri')) {
 
 /**
  * @purpose Web extraction action definition implementing the Shukoi action contract.
- * @rationale Transforms arbitrary web pages into clean LLM-friendly Markdown with SSRF immunity, auto-scroll XHR hydration, and zero token waste.
+ * @rationale Transforms arbitrary web pages into clean LLM-friendly Markdown with SSRF immunity, auto-scroll XHR hydration, semantic DOM unfolding, and zero token waste.
  * @invariants Strict TypeBox contract; propagates ctx.signal; pure web-standard implementation.
  */
 export const webExtractAction = defineAction({
   name: 'webExtract',
-  summary: 'Visit a webpage and extract token-dense Markdown',
+  summary: 'Fetch and read full webpage content as clean, token-dense Markdown',
   description:
-    'Visits target webpage with stealth browser, progressively scrolls to trigger lazy-loaded XHR/SPA content, auto-clicks content expanders, and converts structured content to token-efficient GitHub Flavored Markdown.',
+    'Navigates to any public website URL using stealth browser automation, hydrates client-side rendering (SPA/XHR), unfolds collapsed content using universal W3C ARIA standards and native HTML5 disclosures, unclamps CSS line-clamping, and serializes clean GitHub Flavored Markdown. Use this as Step 2 after googleSearch by supplying the canonical URL from search results, OR as Step 1 when the user supplies a direct URL. Call this whenever search snippets are insufficient, truncated, or when complete context (tables, specifications, code blocks, full articles, reviews) is required.',
   authRequired: false,
   http: {
     method: 'POST',
@@ -54,7 +54,8 @@ export const webExtractAction = defineAction({
         format: 'uri',
         minLength: 1,
         maxLength: 2048,
-        description: 'Target website HTTP or HTTPS URL to visit and extract',
+        description:
+          'Target website HTTP or HTTPS URL to fetch. Accepts direct URLs or canonical URLs discovered via googleSearch.',
       }),
       smartScroll: Type.Optional(
         Type.Boolean({
@@ -67,16 +68,18 @@ export const webExtractAction = defineAction({
         Type.Integer({
           minimum: 100,
           maximum: 5000,
+          default: 500,
           description:
-            'Debounce wait time in milliseconds after each scroll step (increase to 1000-2000ms for slow networks)',
+            'Debounce wait time in milliseconds after each scroll step (increase to 1000-2000ms for slow networks, default: 500)',
         }),
       ),
       maxScrolls: Type.Optional(
         Type.Integer({
           minimum: 0,
           maximum: 20,
+          default: 6,
           description:
-            'Maximum scroll step iterations (increase for deeply nested or long catalog pages, default: 6)',
+            'Maximum scroll step iterations for lazy content hydration and DOM convergence (default: 6)',
         }),
       ),
       timeoutMs: Type.Optional(

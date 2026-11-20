@@ -63,14 +63,14 @@ export interface SmartScrollOptions {
 }
 
 /**
- * @purpose Progressively scrolls down an active page to trigger IntersectionObserver lazy-loading, auto-clicks expander buttons, and detects DOM height convergence.
- * @rationale Modern dynamic SPAs and e-commerce platforms load essential content (prices, reviews, specifications) via asynchronous XHR only upon scrolling into view.
+ * @purpose Progressively scrolls down an active page to trigger IntersectionObserver lazy-loading, semantic DOM unfolding (W3C WAI-ARIA and native HTML5 disclosures), and detects DOM height convergence.
+ * @rationale Eliminates language-locked regex patterns by adhering to W3C WAI-ARIA accessibility standards (`aria-expanded="false"`, `data-state="closed"`, `aria-controls`), native `<details>` disclosures, and in-browser CSS layout unclamping while preventing navigation hijacking.
  * @preconditions page must be an active, navigated Page instance.
  * @param page Active Patchright Page instance.
  * @param options Optional SmartScrollOptions tuning parameters or maximum scroll count number.
  * @returns Promise resolving once DOM mutations converge or maxScrolls is reached.
  * @throws Never throws directly; failures during scroll evaluation are captured cleanly.
- * @invariants Bounded iteration loop; non-blocking async execution.
+ * @invariants Bounded iteration loop; non-blocking async execution; zero click on `<a>` tags or form buttons; strict idempotency via `data-mcp-unfolded`.
  */
 export async function smartScrollAndHydrate(
   page: Page,
@@ -104,23 +104,77 @@ export async function smartScrollAndHydrate(
           window.scrollBy(0, stepPx);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-          // Auto-click common truncation expander buttons
-          const expanders = Array.from(
-            document.querySelectorAll('button, [role="button"], a, span'),
-          );
-          for (const el of expanders) {
-            const text = el.textContent?.trim().toLowerCase() || '';
-            if (
-              text === 'lihat selengkapnya' ||
-              text === 'read more' ||
-              text === 'show more' ||
-              text === 'selengkapnya'
-            ) {
-              try {
-                (el as HTMLElement).click();
-              } catch {}
+          // Pillar 1: Open native HTML5 disclosure details elements (zero click, zero side-effects)
+          try {
+            const collapsedDetails = document.querySelectorAll('details:not([open])');
+            for (const d of collapsedDetails) {
+              (d as HTMLDetailsElement).open = true;
             }
-          }
+          } catch {}
+
+          // Pillar 2 & 3: W3C WAI-ARIA Standards & Relational Controls
+          try {
+            const candidates = document.querySelectorAll(
+              'button:not([data-mcp-unfolded]), [role="button"]:not([data-mcp-unfolded]), summary:not([data-mcp-unfolded])',
+            );
+
+            let unfoldedCount = 0;
+            const MAX_UNFOLD_PER_STEP = 50;
+
+            for (const el of candidates) {
+              if (unfoldedCount >= MAX_UNFOLD_PER_STEP) {
+                break;
+              }
+
+              // Tag element as inspected to maintain strict idempotency
+              el.setAttribute('data-mcp-unfolded', 'true');
+
+              // Strict Safety Guard 1: Never click navigation links or form submit/reset buttons
+              if (el.tagName.toLowerCase() === 'a') {
+                continue;
+              }
+              const btnType = el.getAttribute('type');
+              if (btnType === 'submit' || btnType === 'reset') {
+                continue;
+              }
+
+              // Strict Safety Guard 2: Exclude popup menus, dialogs, and modals
+              const hasPopup = el.getAttribute('aria-haspopup');
+              if (hasPopup === 'menu' || hasPopup === 'dialog' || hasPopup === 'true') {
+                continue;
+              }
+
+              // Check if element is a closed disclosure / accordion
+              const ariaExpanded = el.getAttribute('aria-expanded');
+              const dataState = el.getAttribute('data-state');
+              const ariaControls = el.getAttribute('aria-controls');
+
+              let shouldTrigger = false;
+
+              // Pillar 2: Explicit ARIA or headless state
+              if (ariaExpanded === 'false' || dataState === 'closed') {
+                shouldTrigger = true;
+              } else if (ariaControls) {
+                // Pillar 3: Target panel is currently hidden/collapsed
+                const target = document.getElementById(ariaControls);
+                if (
+                  target &&
+                  (target.hasAttribute('hidden') ||
+                    target.getAttribute('aria-hidden') === 'true' ||
+                    window.getComputedStyle(target).display === 'none')
+                ) {
+                  shouldTrigger = true;
+                }
+              }
+
+              if (shouldTrigger) {
+                try {
+                  (el as HTMLElement).click();
+                  unfoldedCount++;
+                } catch {}
+              }
+            }
+          } catch {}
 
           const newHeight = getScrollHeight();
           step++;
@@ -132,6 +186,20 @@ export async function smartScrollAndHydrate(
           }
           lastHeight = newHeight;
         }
+
+        // Pillar 4: In-Browser CSS Layout Unclamping Engine
+        try {
+          const unclampStyle = document.createElement('style');
+          unclampStyle.id = 'mcp-unclamp-style';
+          unclampStyle.textContent = `
+            * {
+              -webkit-line-clamp: unset !important;
+              max-height: none !important;
+              overflow: visible !important;
+            }
+          `;
+          (document.head || document.body)?.appendChild(unclampStyle);
+        } catch {}
       },
       { maxSteps: maxScrolls, stepPx: scrollStepPx, delayMs: scrollDelayMs },
     );

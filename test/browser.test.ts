@@ -43,16 +43,17 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
   });
 
   it('completes smartScrollAndHydrate within bounded timeout even with background activity', async () => {
-    const duration = await browserManager.withPage(async (page) => {
+    const { duration, isExtraVisible } = await browserManager.withPage(async (page) => {
       await page.setContent(`
         <html>
           <body style="min-height: 2500px;">
             <h1>Long Dynamic Page</h1>
-            <button id="expander">Lihat Selengkapnya</button>
+            <button id="expander" aria-expanded="false" aria-controls="extra">Read More</button>
             <div id="extra" style="display: none; height: 800px;">Expanded lazy content</div>
             <script>
               document.getElementById('expander').addEventListener('click', function() {
                 document.getElementById('extra').style.display = 'block';
+                this.setAttribute('aria-expanded', 'true');
               });
             </script>
           </body>
@@ -61,10 +62,88 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
 
       const start = Date.now();
       await smartScrollAndHydrate(page, 3);
-      return Date.now() - start;
+      const elapsed = Date.now() - start;
+
+      const extraDisplay = await page.$eval('#extra', (el) => window.getComputedStyle(el).display);
+      return { duration: elapsed, isExtraVisible: extraDisplay === 'block' };
     });
 
     expect(duration).toBeLessThan(10000);
+    expect(isExtraVisible).toBe(true);
+  });
+
+  it('unfolds universal semantic elements (HTML5 details, ARIA, and data-state) while skipping links and submit buttons', async () => {
+    const evaluation = await browserManager.withPage(async (page) => {
+      await page.setContent(`
+        <html>
+          <head></head>
+          <body style="min-height: 2000px;">
+            <details id="native-details">
+              <summary>FAQ Summary</summary>
+              <p id="faq-content">Deep technical documentation content</p>
+            </details>
+
+            <button id="btn-aria" aria-expanded="false" onclick="this.setAttribute('data-clicked', 'true')">
+              Expand Specs
+            </button>
+
+            <button id="btn-state" data-state="closed" onclick="this.setAttribute('data-clicked', 'true')">
+              Accordion Tab
+            </button>
+
+            <a id="link-nav" aria-expanded="false" href="https://example.com/login" onclick="this.setAttribute('data-clicked', 'true')">
+              Login Link
+            </a>
+
+            <button id="btn-submit" type="submit" aria-expanded="false" onclick="this.setAttribute('data-clicked', 'true')">
+              Submit Form
+            </button>
+
+            <button id="btn-menu" aria-expanded="false" aria-haspopup="menu" onclick="this.setAttribute('data-clicked', 'true')">
+              Menu Trigger
+            </button>
+
+            <div id="controlled-panel" style="display: none;">Relational content</div>
+            <button id="btn-controls" aria-controls="controlled-panel" onclick="this.setAttribute('data-clicked', 'true')">
+              Toggle Controls
+            </button>
+          </body>
+        </html>
+      `);
+
+      await smartScrollAndHydrate(page, 2);
+
+      return await page.evaluate(() => {
+        const details = document.getElementById('native-details') as HTMLDetailsElement;
+        const btnAria = document.getElementById('btn-aria');
+        const btnState = document.getElementById('btn-state');
+        const linkNav = document.getElementById('link-nav');
+        const btnSubmit = document.getElementById('btn-submit');
+        const btnMenu = document.getElementById('btn-menu');
+        const btnControls = document.getElementById('btn-controls');
+        const unclampStyle = document.getElementById('mcp-unclamp-style');
+
+        return {
+          detailsOpen: details?.open,
+          btnAriaClicked: btnAria?.getAttribute('data-clicked') === 'true',
+          btnStateClicked: btnState?.getAttribute('data-clicked') === 'true',
+          btnControlsClicked: btnControls?.getAttribute('data-clicked') === 'true',
+          linkNavClicked: linkNav?.getAttribute('data-clicked') === 'true',
+          btnSubmitClicked: btnSubmit?.getAttribute('data-clicked') === 'true',
+          btnMenuClicked: btnMenu?.getAttribute('data-clicked') === 'true',
+          unclampStyleInjected: unclampStyle !== null,
+        };
+      });
+    });
+
+    expect(evaluation.detailsOpen).toBe(true);
+    expect(evaluation.btnAriaClicked).toBe(true);
+    expect(evaluation.btnStateClicked).toBe(true);
+    expect(evaluation.btnControlsClicked).toBe(true);
+    expect(evaluation.linkNavClicked).toBe(false);
+    expect(evaluation.btnSubmitClicked).toBe(false);
+    expect(evaluation.btnMenuClicked).toBe(false);
+    expect(evaluation.unclampStyleInjected).toBe(true);
   });
 
   it('launches Chrome stealth browser and evaluates page content', async () => {

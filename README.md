@@ -1,5 +1,6 @@
 # 🎭 MCP Web Research Server
 
+[![Version: 1.1.0](https://img.shields.io/badge/Version-1.1.0-blue.svg)](package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript: 5.7+](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
 [![Patchright: Undetected](https://img.shields.io/badge/Driver-Patchright-goldenrod.svg)](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)
@@ -14,7 +15,7 @@ Engineered for AI coding agents and autonomous workflows requiring high-accuracy
 
 - **🎭 Undetectable Anti-Bot Evasion (Patchright + Chrome):** Built on Patchright (patched driver eliminating `Runtime.enable`, `--enable-automation`, and console leaks). Enforces official Google Chrome (`channel: 'chrome'`) with zero-fallback for 100% genuine consumer browser fingerprints.
 - **⚡ Pre-Warmed Persistent Pool (<100ms Tab Acquisition):** Browser context is pre-warmed at server boot with a persistent user profile (`launchPersistentContext`), retaining DNS, TLS session tickets, V8 bytecode, and consent cookies for 38–50% faster navigations.
-- **🔄 Smart Progressive Auto-Scroll & DOM Convergence:** Handles complex e-commerce, SPA, and XHR-heavy sites (e.g. Tokopedia, Shopee, Reddit). Progressively scrolls, triggers `IntersectionObserver` lazy-loads, auto-clicks content expanders (*"Lihat Selengkapnya"* / *"Read more"*), and stops when DOM height converges.
+- **🔄 Universal Regex-Free Semantic DOM Unfolding & Auto-Scroll:** Handles complex e-commerce, SPA, and XHR-heavy sites (e.g. Tokopedia, Shopee, Reddit). Progressively scrolls, triggers `IntersectionObserver` lazy-loads, unfolds collapsed sections using universal W3C WAI-ARIA standards (`aria-expanded="false"`, `data-state="closed"`, `aria-controls`) and native HTML5 `<details>` disclosures with zero language-locking, unclamps CSS line-clamping, and stops when DOM height converges.
 - **📉 Token-Efficient & High-Density Markdown:** Strips token-wasting avatar images, promotional widgets, and redundant blank lines. Compiles clean GitHub Flavored Markdown via Unified AST (`linkedom` + `@mozilla/readability` + `rehype-remark` + `remark-gfm`).
 - **🛡️ Zero-Trust SSRF Defense:** Rejects loopback (`127.0.0.0/8`, `::1`), RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local metadata (`169.254.169.254`, `metadata.google.internal`), and non-HTTP protocols.
 - **🖥️ Cross-Platform Isolation:** Dedicated virtual framebuffer (`DISPLAY=:99`) on Linux; automatic background stealth headless mode on macOS and Windows to prevent desktop window focus-stealing.
@@ -85,11 +86,11 @@ All settings can be configured via environment variables. Universal defaults are
 | `MAX_REQUESTS_BEFORE_RECYCLE` | `integer` | `1000` | Lifetime requests before background browser restart to prevent RAM fragmentation. |
 | `MAX_CONTENT_LENGTH` | `integer` | `5242880` (5MB) | Upper bound memory guard against massive HTML payloads. |
 | `NETWORK_IDLE_TIMEOUT_MS` | `integer` | `5000` | Maximum wait time in ms for initial network stabilization before scrolling. |
-| `SCROLL_DELAY_MS` | `integer` | `500` | Debounce delay in ms after each scroll step (increase to 1000-2000 for slow networks). |
+| `SCROLL_DELAY_MS` | `integer` | `500` | Debounce delay in ms after each scroll step and semantic unfolding pass (increase to 1000–2000 for slow networks). |
 | `SCROLL_STEP_PX` | `integer` | `1000` | Distance in pixels per scroll increment. |
 | `SCROLL_SETTLE_TIMEOUT_MS` | `integer` | `500` | Final quiet period in ms after scroll loop completes. |
-| `MAX_SCROLL_STEPS` | `integer` | `6` | Default maximum scroll loop iterations before convergence termination. |
-| `SEARCH_WAIT_TIMEOUT_MS` | `integer` | `10000` | Maximum wait time in ms for Google SERP cards to render. |
+| `MAX_SCROLL_STEPS` | `integer` | `6` | Maximum scroll loop iterations for lazy content hydration, semantic unfolding, and DOM convergence. |
+| `SEARCH_WAIT_TIMEOUT_MS` | `integer` | `10000` | Maximum wait time in ms for Google SERP cards to render before parsing results. |
 | `READABILITY_CHAR_THRESHOLD` | `integer` | `20` | Minimum character length for Mozilla Readability article scoring. |
 
 ---
@@ -208,10 +209,10 @@ pnpm run start
 ## 🛠️ MCP Tools Catalog
 
 ### 1. `google_search` (`googleSearchAction`)
-Executes organic web search on Google using stealth Chrome with automatic consent dialog bypass, breadcrumb canonicalization, and rich snippet extraction.
+Executes organic web search on Google using stealth Chrome with automatic consent dialog bypass, breadcrumb canonicalization, and rich snippet extraction. Acts as Step 1 (Discovery & Triage) in agent research workflows, returning candidate URLs and preview snippets.
 
 **Input Parameters:**
-- `query` (*string, required, 1..500 chars*): Search keywords or phrases.
+- `query` (*string, required, 1..500 chars*): Search keywords or phrases. Supports Google Dorking operators for high-precision queries (e.g. `site:github.com "patchright" inurl:releases`, `filetype:pdf "machine learning"`, `intitle:"API docs"`).
 - `limit` (*integer, optional, 1..50, default: 10*): Maximum organic results.
 - `language` (*string, optional, default: "en"*): Language code (e.g. `"en"`, `"id"`).
 - `country` (*string, optional, default: "us"*): Geolocation region code (e.g. `"us"`, `"id"`).
@@ -237,13 +238,13 @@ Executes organic web search on Google using stealth Chrome with automatic consen
 ---
 
 ### 2. `web_extract` (`webExtractAction`)
-Navigates to any target URL, executes intelligent progressive scrolling to trigger lazy XHR/SPA content (prices, reviews, specs), auto-clicks expanders (*"Lihat Selengkapnya"*), and serializes dense GitHub Flavored Markdown.
+Navigates to any target URL, executes intelligent progressive scrolling to trigger lazy XHR/SPA content (prices, reviews, specs), unfolds collapsed content using universal W3C ARIA standards and native HTML5 disclosures, unclamps visual CSS line-clamping, and serializes clean GitHub Flavored Markdown. Acts as Step 2 (Deep Content Reader) following `google_search` or as Step 1 for direct URLs.
 
 **Input Parameters:**
-- `url` (*string, required, format: "uri", 1..2048 chars*): Target website URL (`http://` or `https://`).
-- `smartScroll` (*boolean, optional, default: true*): Enable automated progressive scroll and XHR stabilization.
-- `scrollDelayMs` (*integer, optional, 100..5000, default: 500*): Jeda debounce scroll per langkah. Naikkan ke 1000–2000ms jika koneksi internet lambat.
-- `maxScrolls` (*integer, optional, 0..20, default: 6*): Batas iterasi scroll. Naikkan untuk halaman katalog atau ulasan yang sangat panjang.
+- `url` (*string, required, format: "uri", 1..2048 chars*): Target website URL (`http://` or `https://`). Accepts direct URLs or canonical URLs discovered via `google_search`.
+- `smartScroll` (*boolean, optional, default: true*): Enable automated progressive scroll, semantic unfolding, and XHR stabilization.
+- `scrollDelayMs` (*integer, optional, 100..5000, default: 500*): Debounce wait time in milliseconds after each scroll step (increase to 1000–2000ms for slow networks).
+- `maxScrolls` (*integer, optional, 0..20, default: 6*): Maximum scroll step iterations for lazy content hydration and DOM convergence.
 - `timeoutMs` (*integer, optional, 1000..60000, default: 30000*): Maximum navigation deadline.
 
 **Example Tool Response:**
