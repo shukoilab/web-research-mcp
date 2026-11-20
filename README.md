@@ -44,7 +44,11 @@ All settings can be configured via environment variables. Universal defaults are
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
+| `HOST` | `string` | `0.0.0.0` | Network interface address to bind HTTP service on VPS/host. |
 | `PORT` | `integer` | `3000` | HTTP port for streamable MCP and health check endpoints. |
+| `ALLOWED_HOSTS` | `string` | `*` | Comma-separated list or wildcard (`*`) of allowed Host headers for DNS-rebinding protection. |
+| `ALLOWED_ORIGINS` | `string` | `*` | Comma-separated list or wildcard (`*`) of allowed Origin headers for CORS security. |
+| `MCP_API_KEY` / `API_KEY` | `string` | `undefined` | Optional secret token(s) for HTTP API protection (comma-separated for key rotation). If unset, auth is disabled. |
 | `HTTP_PROXY` | `string` | `undefined` | Optional HTTP/HTTPS proxy URI (e.g. `http://user:pass@host:port`). |
 | `BROWSER_USER_DATA_DIR` | `string` | `~/.cache/mcp-web-research/chrome-profile` | Persistent directory storing Chrome cache, cookies, and session state. |
 | `BROWSER_TIMEOUT_MS` | `integer` | `30000` | Default navigation timeout in milliseconds. |
@@ -63,8 +67,9 @@ All settings can be configured via environment variables. Universal defaults are
 
 ## 🚀 Client Installation & Setup Guide
 
-### Option 1: Docker Streamable HTTP Service (Recommended for Remote Agents & Teams)
+### Option 1: Docker Streamable HTTP Service (Recommended for Remote Agents, VPS & Teams)
 
+#### 1. Quick Start (Default Settings)
 Run as an isolated, persistent network service on any machine:
 
 ```bash
@@ -73,16 +78,109 @@ docker run -d -p 3000:3000 --shm-size=1gb --name web-research-mcp --restart unle
 
 > **Tip on Custom Host Ports:** If port 3000 is occupied on your host, forward your desired host port to container port 3000 (e.g. `-p 3031:3000`), or override the internal port via environment variable (e.g. `-p 3031:3031 -e PORT=3031`).
 
+#### 2. Production VPS Deployment with Full Configuration Knobs
+Customize any operational parameter directly at runtime via environment variables (`-e`). You do **not** need to modify or rebuild the `Dockerfile`:
+
+```bash
+docker run -d \
+  --name web-research-mcp \
+  --restart unless-stopped \
+  --shm-size=1gb \
+  -p 3000:3000 \
+  -e HOST="0.0.0.0" \
+  -e PORT="3000" \
+  -e ALLOWED_HOSTS="*" \
+  -e ALLOWED_ORIGINS="*" \
+  -e MCP_API_KEY="sk-your-secret-api-key" \
+  -e HTTP_PROXY="" \
+  -e BROWSER_TIMEOUT_MS="30000" \
+  -e MAX_CONCURRENT_PAGES="5" \
+  -e MAX_REQUESTS_BEFORE_RECYCLE="1000" \
+  -e MAX_CONTENT_LENGTH="5242880" \
+  -e NETWORK_IDLE_TIMEOUT_MS="5000" \
+  -e SCROLL_DELAY_MS="500" \
+  -e SCROLL_STEP_PX="1000" \
+  -e SCROLL_SETTLE_TIMEOUT_MS="500" \
+  -e MAX_SCROLL_STEPS="6" \
+  -e SEARCH_WAIT_TIMEOUT_MS="10000" \
+  -e READABILITY_CHAR_THRESHOLD="20" \
+  ghcr.io/shukoilab/web-research-mcp:latest
+```
+
+#### 3. Using an Environment File (`--env-file`)
+Keep sensitive keys and parameters organized in a local `.env` file:
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  --shm-size=1gb \
+  --env-file .env \
+  --name web-research-mcp \
+  --restart unless-stopped \
+  ghcr.io/shukoilab/web-research-mcp:latest
+```
+
+#### 4. Docker Compose Deployment (`docker-compose.yml`)
+For automated restarts, VPS orchestration, and persistent stacks:
+
+```yaml
+version: '3.8'
+
+services:
+  web-research-mcp:
+    image: ghcr.io/shukoilab/web-research-mcp:latest
+    container_name: web-research-mcp
+    restart: unless-stopped
+    shm_size: 1gb
+    ports:
+      - "3000:3000"
+    environment:
+      # Network & Security
+      - HOST=0.0.0.0
+      - PORT=3000
+      - ALLOWED_HOSTS=*
+      - ALLOWED_ORIGINS=*
+      - MCP_API_KEY=sk-your-secret-api-key
+      # Browser Performance & Tuning
+      - BROWSER_TIMEOUT_MS=30000
+      - MAX_CONCURRENT_PAGES=5
+      - MAX_REQUESTS_BEFORE_RECYCLE=1000
+      - MAX_CONTENT_LENGTH=5242880
+      - NETWORK_IDLE_TIMEOUT_MS=5000
+      - SCROLL_DELAY_MS=500
+      - SCROLL_STEP_PX=1000
+      - SCROLL_SETTLE_TIMEOUT_MS=500
+      - MAX_SCROLL_STEPS=6
+      - SEARCH_WAIT_TIMEOUT_MS=10000
+      - READABILITY_CHAR_THRESHOLD=20
+```
+
 - **MCP Endpoint:** `http://localhost:3000/mcp` (Streamable HTTP transport)
 - **Healthcheck Probe:** `GET http://localhost:3000/health` (HTTP 200/503)
 
-Configure in Cursor or OpenCode:
+#### 5. Connecting AI Clients with Optional Authentication
 
+**In Cursor / OpenCode (`opencode.json` / remote MCP settings):**
 ```json
 {
   "type": "remote",
-  "url": "http://localhost:3000/mcp"
+  "url": "http://your-vps-ip:3000/mcp",
+  "headers": {
+    "Authorization": "Bearer sk-your-secret-api-key"
+  }
 }
+```
+
+**Testing via cURL:**
+```bash
+# Public liveness healthcheck probe (always unauthenticated)
+curl -s http://localhost:3000/health
+
+# MCP request with Bearer Token (or X-API-Key header)
+curl -s -X POST http://localhost:3000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-secret-api-key" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl-client","version":"1.0.0"}}}'
 ```
 
 ---

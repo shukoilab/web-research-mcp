@@ -12,6 +12,7 @@ import { googleSearchAction } from '../actions/google-search.js';
 import { healthAction } from '../actions/health.js';
 import { webExtractAction } from '../actions/web-extract.js';
 import { config, webResearchConfig } from '../config.js';
+import { apiKeyAuthMiddleware } from '../services/auth.js';
 import { BrowserManager } from '../services/browser.js';
 
 /**
@@ -57,6 +58,7 @@ app.get('/health', (c) => {
 
 const handler = createMcpHttpHandler(catalog, config);
 
+app.use('/mcp', apiKeyAuthMiddleware({ apiKeys: webResearchConfig.apiKeys }));
 app.all('/mcp', async (c) => handler(c.req.raw, c.env));
 
 /**
@@ -67,7 +69,7 @@ app.all('/mcp', async (c) => handler(c.req.raw, c.env));
 export const server = serve({
   fetch: app.fetch,
   port: webResearchConfig.port,
-  hostname: process.env.HOST || '0.0.0.0',
+  hostname: webResearchConfig.host,
 });
 
 let isShuttingDown = false;

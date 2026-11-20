@@ -60,6 +60,21 @@ describe('Cross-Platform Configuration & Invariants', () => {
       expect(webResearchConfig.port).toBeGreaterThanOrEqual(1);
       expect(webResearchConfig.port).toBeLessThanOrEqual(65535);
     });
+
+    it('defaults HOST to 0.0.0.0 and allows wildcards on allowedHosts and allowedOrigins', async () => {
+      const { webResearchConfig, parseCommaSeparatedList } = await import('../src/config.js');
+      expect(webResearchConfig.host).toBe('0.0.0.0');
+      expect(webResearchConfig.allowedHosts).toContain('*');
+      expect(webResearchConfig.allowedOrigins).toContain('*');
+      expect(Array.isArray(webResearchConfig.apiKeys)).toBe(true);
+
+      // parseCommaSeparatedList helper tests
+      expect(parseCommaSeparatedList(undefined, ['default'])).toEqual(['default']);
+      expect(parseCommaSeparatedList('', ['default'])).toEqual(['default']);
+      expect(parseCommaSeparatedList('   ', ['default'])).toEqual(['default']);
+      expect(parseCommaSeparatedList('host1, host2,host3')).toEqual(['host1', 'host2', 'host3']);
+      expect(parseCommaSeparatedList('*')).toEqual(['*']);
+    });
   });
 
   describe('webResearchConfig Universal Defaults', () => {

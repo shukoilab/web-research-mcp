@@ -26,7 +26,11 @@ export interface ProxyConfig {
  * @invariants Deeply frozen runtime object; immutable.
  */
 export interface WebResearchConfig {
+  readonly host: string;
   readonly port: number;
+  readonly allowedHosts: readonly string[];
+  readonly allowedOrigins: readonly string[];
+  readonly apiKeys: readonly string[];
   readonly httpProxy?: string;
   readonly browserTimeoutMs: number;
   readonly maxConcurrentPages: number;
@@ -64,6 +68,30 @@ export function parseProxyConfig(rawUrl?: string): ProxyConfig | undefined {
 }
 
 /**
+ * @purpose Parses a comma-separated list of strings from an environment variable with defensive trimming.
+ * @rationale Safely splits multi-value configuration strings like ALLOWED_HOSTS, ALLOWED_ORIGINS, and API_KEY without empty tokens.
+ * @preconditions rawValue is optional string from process.env.
+ * @param rawValue Optional raw string from environment variable.
+ * @param defaultValues Default string array fallback if rawValue is unset or blank.
+ * @returns Readonly array of non-empty trimmed string tokens.
+ * @throws Never throws directly.
+ * @invariants Pure function; Big-O time complexity O(n); immutable array output.
+ */
+export function parseCommaSeparatedList(
+  rawValue: string | undefined,
+  defaultValues: readonly string[] = [],
+): readonly string[] {
+  if (!rawValue || rawValue.trim() === '') {
+    return defaultValues;
+  }
+  const tokens = rawValue
+    .split(',')
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  return tokens.length > 0 ? Object.freeze(tokens) : defaultValues;
+}
+
+/**
  * @purpose Resolves the persistent browser user data directory path.
  * @rationale Using a persistent profile caches DNS, TLS tickets, V8 bytecode, and consent cookies, yielding 38-50% faster navigations and higher antibot reputation.
  * @preconditions envDir is optional path string from environment.
@@ -84,27 +112,19 @@ export function resolveDefaultUserDataDir(
 }
 
 /**
- * @purpose Standard Shukoi platform runtime configuration.
- * @rationale Provides base limits, observability settings, and security policies for MCP transports.
- * @invariants Deeply frozen ShukoiConfig instance.
- */
-export const config: ShukoiConfig = createDefaultConfig({
-  observability: {
-    serviceName: 'mcp-web-research',
-    serviceVersion: '2.0.2',
-  },
-});
-
-/**
  * @purpose Validated web research configuration instance populated from environment variables and OS detection.
- * @rationale Resolves DISPLAY, proxy parameters, timeouts, persistent profiles, scroll tuning, and concurrency controls with defensive defaults.
+ * @rationale Resolves DISPLAY, proxy parameters, timeouts, persistent profiles, scroll tuning, host binding, wildcards, and auth with defensive defaults.
  * @invariants Readonly, immutable configuration object.
  */
 export const webResearchConfig: WebResearchConfig = Object.freeze({
+  host: process.env.HOST ? process.env.HOST.trim() : '0.0.0.0',
   port: Math.max(
     1,
     Math.min(65535, Number.parseInt(process.env.PORT || process.env.MCP_PORT || '3000', 10)),
   ),
+  allowedHosts: parseCommaSeparatedList(process.env.ALLOWED_HOSTS, ['*']),
+  allowedOrigins: parseCommaSeparatedList(process.env.ALLOWED_ORIGINS, ['*']),
+  apiKeys: parseCommaSeparatedList(process.env.MCP_API_KEY || process.env.API_KEY, []),
   httpProxy: process.env.HTTP_PROXY || process.env.http_proxy || undefined,
   browserTimeoutMs: Math.max(1000, Number.parseInt(process.env.BROWSER_TIMEOUT_MS || '30000', 10)),
   maxConcurrentPages: Math.max(1, Number.parseInt(process.env.MAX_CONCURRENT_PAGES || '5', 10)),
@@ -136,4 +156,20 @@ export const webResearchConfig: WebResearchConfig = Object.freeze({
     5,
     Number.parseInt(process.env.READABILITY_CHAR_THRESHOLD || '20', 10),
   ),
+});
+
+/**
+ * @purpose Standard Shukoi platform runtime configuration.
+ * @rationale Provides base limits, observability settings, and security policies for MCP transports.
+ * @invariants Deeply frozen ShukoiConfig instance.
+ */
+export const config: ShukoiConfig = createDefaultConfig({
+  observability: {
+    serviceName: 'mcp-web-research',
+    serviceVersion: '2.0.2',
+  },
+  security: {
+    allowedHosts: webResearchConfig.allowedHosts,
+    allowedOrigins: webResearchConfig.allowedOrigins,
+  },
 });
