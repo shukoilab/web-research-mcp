@@ -243,7 +243,9 @@ export async function extractContentToMarkdown(
     const bestTitle =
       fallbackTitle && fallbackTitle !== 'Untitled'
         ? fallbackTitle
-        : (articleTitle && articleTitle !== 'Untitled' ? articleTitle : ogTitle || fallbackTitle);
+        : articleTitle && articleTitle !== 'Untitled'
+          ? articleTitle
+          : ogTitle || fallbackTitle;
 
     const summaryText =
       jsonLdDescriptor ||
