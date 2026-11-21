@@ -11,8 +11,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 LABEL io.modelcontextprotocol.server.name="io.github.shukoilab/web-research-mcp"
 
-# Install system dependencies: Xvfb, fonts, ca-certificates, curl, gnupg, and procps
+# Install system dependencies: Xvfb, fonts, ca-certificates, curl, gnupg, procps, and tini
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini \
     xvfb \
     fonts-liberation \
     fonts-noto-color-emoji \
@@ -41,5 +42,5 @@ RUN mkdir -p /root/.cache/mcp-web-research/chrome-profile
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker-entrypoint.sh"]
 CMD ["node", "dist/entries/mcp-http.js"]

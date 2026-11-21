@@ -7,13 +7,14 @@
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { DomainError } from '@shukoi/core';
 import { type BrowserContext, chromium, type Page } from 'patchright';
 import { parseProxyConfig, webResearchConfig } from '../config.js';
 
 /**
  * @purpose Ensures an X11 virtual framebuffer (Xvfb) is active on DISPLAY=:99 on Linux platforms.
- * @rationale Strictly prevents Google Chrome from ever rendering or opening windows on physical host displays (:0, :1), guaranteeing 100% invisible execution across bare metal and container environments.
+ * @rationale Strictly prevents Google Chrome from ever rendering or opening windows on physical host displays (:0, :1), guaranteeing 100% invisible execution across bare metal and container environments with automated self-healing against stale locks.
  * @preconditions Linux operating system environment.
  * @param None.
  * @returns Void.
@@ -22,7 +23,50 @@ import { parseProxyConfig, webResearchConfig } from '../config.js';
  */
 export function ensureVirtualDisplay(): void {
   if (process.platform !== 'linux') return;
-  if (fs.existsSync('/tmp/.X11-unix/X99')) return;
+
+  const lockPath = '/tmp/.X99-lock';
+  const socketPath = '/tmp/.X11-unix/X99';
+
+  // Self-healing check: verify if an active process genuinely owns the X99 display lock
+  if (fs.existsSync(lockPath)) {
+    try {
+      const lockContent = fs.readFileSync(lockPath, 'utf8').trim();
+      const pid = Number.parseInt(lockContent, 10);
+      if (!Number.isNaN(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+          // Process is actively running; check if socket is ready or wait briefly for socket initialization
+          if (fs.existsSync(socketPath)) {
+            return;
+          }
+          const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+          for (let i = 0; i < 10; i++) {
+            Atomics.wait(sleepBuffer, 0, 0, 50);
+            if (fs.existsSync(socketPath)) return;
+          }
+        } catch {
+          // Process does not exist (ESRCH); clean up stale lock and socket
+          try {
+            fs.unlinkSync(lockPath);
+          } catch {}
+          try {
+            if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+          } catch {}
+        }
+      } else {
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {}
+      }
+    } catch {
+      // Suppress read errors defensively
+    }
+  } else if (fs.existsSync(socketPath)) {
+    // Socket exists without a lock file (orphaned socket after crash)
+    try {
+      fs.unlinkSync(socketPath);
+    } catch {}
+  }
 
   try {
     const proc = spawn(
@@ -53,11 +97,34 @@ export function ensureVirtualDisplay(): void {
     // Bounded non-spinning wait for X11 socket creation (max 1500ms)
     const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
     for (let i = 0; i < 30; i++) {
-      if (fs.existsSync('/tmp/.X11-unix/X99')) break;
+      if (fs.existsSync(socketPath)) break;
       Atomics.wait(sleepBuffer, 0, 0, 50);
     }
   } catch {
     // If invocation fails synchronously, handled gracefully
+  }
+}
+
+/**
+ * @purpose Removes stale Google Chrome Singleton lock files from persistent user data directory.
+ * @rationale Abrupt container termination or power failures leave SingletonLock files preventing subsequent Chrome browser startup.
+ * @preconditions userDataDir must be a valid directory path string.
+ * @param userDataDir Path to persistent Chrome user profile directory.
+ * @returns Void.
+ * @throws Never throws directly; filesystem errors are handled defensively.
+ * @invariants Pure filesystem cleanup; idempotent; Big-O time complexity O(1).
+ */
+export function cleanStaleChromeLocks(userDataDir: string): void {
+  try {
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    for (const file of lockFiles) {
+      const filePath = path.join(userDataDir, file);
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {}
+    }
+  } catch {
+    // Suppress lock cleanup errors gracefully
   }
 }
 
@@ -420,6 +487,7 @@ export class BrowserManager {
     this.launchPromise = (async () => {
       try {
         fs.mkdirSync(webResearchConfig.userDataDir, { recursive: true });
+        cleanStaleChromeLocks(webResearchConfig.userDataDir);
         const proxy = parseProxyConfig(webResearchConfig.httpProxy);
         const targetDisplay = resolveDisplay();
         const displayEnv = targetDisplay ? { DISPLAY: targetDisplay } : {};

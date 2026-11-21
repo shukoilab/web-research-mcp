@@ -117,11 +117,28 @@ export const webExtractAction = defineAction({
     // 2. Perform stealth page acquisition, smart auto-scroll, and content retrieval
     const browserManager = BrowserManager.getInstance();
 
-    const rawHtml = await browserManager.withPage(
+    const { rawHtml, preHydrationTitle, preHydrationDescription } = await browserManager.withPage(
       async (page) => {
         await page.goto(validatedUrl.toString(), {
           waitUntil: 'domcontentloaded',
         });
+
+        // Capture initial pre-hydration document title and meta description before potential client-side SPA redirects or login gates
+        const preMeta = await page
+          .evaluate(() => {
+            const title = document.title || '';
+            const desc =
+              document.querySelector('meta[name="description" i]')?.getAttribute('content') ||
+              document
+                .querySelector('meta[property="og:description" i]')
+                ?.getAttribute('content') ||
+              document
+                .querySelector('meta[name="twitter:description" i]')
+                ?.getAttribute('content') ||
+              '';
+            return { title, desc };
+          })
+          .catch(() => ({ title: '', desc: '' }));
 
         // Execute smart progressive scrolling for dynamic SPAs and lazy XHR elements
         if (input.smartScroll !== false) {
@@ -131,7 +148,12 @@ export const webExtractAction = defineAction({
           });
         }
 
-        return await page.content();
+        const html = await page.content();
+        return {
+          rawHtml: html,
+          preHydrationTitle: preMeta.title,
+          preHydrationDescription: preMeta.desc,
+        };
       },
       {
         signal: ctx.signal,
@@ -140,7 +162,16 @@ export const webExtractAction = defineAction({
     );
 
     // 3. Extract article, sanitize noise, and compile to high-density Markdown
-    const extracted = await extractContentToMarkdown(rawHtml, validatedUrl.hostname);
+    const fallbackTitle =
+      preHydrationTitle && preHydrationTitle.trim() !== ''
+        ? preHydrationTitle.trim()
+        : validatedUrl.hostname;
+
+    const extracted = await extractContentToMarkdown(
+      rawHtml,
+      fallbackTitle,
+      preHydrationDescription,
+    );
 
     return {
       url: input.url,

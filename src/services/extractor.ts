@@ -80,10 +80,11 @@ export async function convertHtmlToMarkdown(html: string): Promise<string> {
 
 /**
  * @purpose Ingests raw webpage HTML, strips boilerplate, and produces structured article Markdown.
- * @rationale Employs Mozilla Readability heuristics with deterministic fallback to main/body elements when pages are non-article layouts (catalogs, portals, landing pages).
+ * @rationale Employs Mozilla Readability heuristics with deterministic fallback to main/body elements and pre-rendered OpenGraph/meta descriptors when pages are non-article layouts or blocked by login walls.
  * @preconditions rawHtml must be a valid HTML string; input size is checked against maxContentLength.
  * @param rawHtml Raw source HTML from browser or fetch response.
- * @param fallbackTitle Optional fallback title if DOM lacks title elements.
+ * @param fallbackTitle Optional fallback title if DOM lacks title elements or is replaced by SPA routing.
+ * @param fallbackDescription Optional pre-hydration meta description captured before SPA redirection.
  * @returns ExtractedArticle containing clean title, byline, excerpt, and Markdown.
  * @throws Never throws unhandled; returns fallback payload on parse degradation.
  * @invariants Memory bounded by webResearchConfig.maxContentLength; pure DOM manipulation.
@@ -91,6 +92,7 @@ export async function convertHtmlToMarkdown(html: string): Promise<string> {
 export async function extractContentToMarkdown(
   rawHtml: string,
   fallbackTitle = 'Untitled',
+  fallbackDescription?: string,
 ): Promise<ExtractedArticle> {
   const boundedHtml =
     rawHtml.length > webResearchConfig.maxContentLength
@@ -99,7 +101,58 @@ export async function extractContentToMarkdown(
 
   const { document } = parseHTML(boundedHtml);
 
-  // 1. Remove noisy elements (navigation, dialogs, modals, ads, and tracking)
+  // 1. Extract high-fidelity pre-rendered metadata prior to DOM sanitization
+  const metaDescription =
+    document.querySelector('meta[name="description" i]')?.getAttribute('content')?.trim() ||
+    document.querySelector('meta[property="og:description" i]')?.getAttribute('content')?.trim() ||
+    document.querySelector('meta[name="twitter:description" i]')?.getAttribute('content')?.trim() ||
+    fallbackDescription?.trim() ||
+    null;
+
+  const ogTitle =
+    document.querySelector('meta[property="og:title" i]')?.getAttribute('content')?.trim() ||
+    document.querySelector('meta[name="twitter:title" i]')?.getAttribute('content')?.trim() ||
+    null;
+
+  // 2. Extract JSON-LD structured product or article metadata prior to stripping script tags
+  let jsonLdDescriptor: string | null = null;
+  try {
+    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const script of jsonLdScripts) {
+      const rawText = script.textContent?.trim();
+      if (!rawText) continue;
+      try {
+        const data = JSON.parse(rawText);
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue;
+          const itemType = String(item['@type'] || '');
+          if (itemType.includes('Product')) {
+            const lines: string[] = [];
+            if (item.name) lines.push(`**Produk:** ${item.name}`);
+            const brand = item.brand?.name || (typeof item.brand === 'string' ? item.brand : null);
+            if (brand) lines.push(`**Merek:** ${brand}`);
+            const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+            if (offers?.price) {
+              lines.push(`**Harga:** ${offers.priceCurrency || ''} ${offers.price}`.trim());
+            }
+            if (item.description) lines.push(`**Deskripsi:** ${item.description}`);
+            if (lines.length > 0) {
+              jsonLdDescriptor = lines.join('\n\n');
+              break;
+            }
+          }
+        }
+        if (jsonLdDescriptor) break;
+      } catch {
+        // Ignore malformed JSON-LD scripts
+      }
+    }
+  } catch {
+    // Suppress query selector failures
+  }
+
+  // 3. Remove noisy elements (navigation, dialogs, modals, ads, and tracking)
   const noisyElements = document.querySelectorAll(
     'script, style, noscript, svg, iframe, canvas, [role="dialog"], [class*="cookie"], [id*="cookie"]',
   );
@@ -107,7 +160,7 @@ export async function extractContentToMarkdown(
     el.remove();
   }
 
-  // 2. Remove token-wasting decorative avatars and profile thumbnails
+  // 4. Remove token-wasting decorative avatars and profile thumbnails
   const avatarImages = document.querySelectorAll(
     'img[alt*="profil" i], img[alt*="avatar" i], img[src*="avatar" i], img[src*="profile" i], img[src*="icon" i]',
   );
@@ -115,16 +168,16 @@ export async function extractContentToMarkdown(
     img.remove();
   }
 
-  // 3. Determine title
+  // 5. Determine title candidate hierarchy
   const headingTitle = document.querySelector('h1')?.textContent?.trim();
   const documentTitle = document.querySelector('title')?.textContent?.trim();
-  const pageTitle = headingTitle || documentTitle || fallbackTitle;
+  const pageTitle = headingTitle || documentTitle || ogTitle || fallbackTitle;
 
-  // 4. Parse through Mozilla Readability
+  // 6. Parse through Mozilla Readability
   let articleContentHtml = '';
   let articleTitle = pageTitle;
   let articleByline: string | null = null;
-  let articleExcerpt: string | null = null;
+  let articleExcerpt: string | null = metaDescription;
 
   try {
     const reader = new Readability(document as unknown as Document, {
@@ -134,15 +187,15 @@ export async function extractContentToMarkdown(
 
     if (parsedArticle?.content) {
       articleContentHtml = parsedArticle.content;
-      articleTitle = headingTitle || parsedArticle.title || pageTitle;
+      articleTitle = headingTitle || parsedArticle.title || ogTitle || pageTitle;
       articleByline = parsedArticle.byline || null;
-      articleExcerpt = parsedArticle.excerpt || null;
+      articleExcerpt = parsedArticle.excerpt || metaDescription || null;
     }
   } catch {
     // Readability parse failure triggers fallback below
   }
 
-  // 5. Deterministic Fallback if Readability yields empty content
+  // 7. Deterministic Fallback if Readability yields empty content
   if (!articleContentHtml || articleContentHtml.trim() === '') {
     const mainEl =
       document.querySelector('main') ||
@@ -161,8 +214,61 @@ export async function extractContentToMarkdown(
     }
   }
 
-  // 6. Compile and compress to Markdown
-  const markdown = await convertHtmlToMarkdown(articleContentHtml);
+  // 8. Compile and compress to Markdown
+  let markdown = await convertHtmlToMarkdown(articleContentHtml);
+
+  // 9. Detect login gates or anti-bot verification walls (e.g. Shopee "Masuk Diperlukan", Cloudflare)
+  const LOGIN_BOT_WALL_PATTERNS = [
+    /masuk diperlukan/i,
+    /login required/i,
+    /sign in required/i,
+    /please sign in/i,
+    /verify you are human/i,
+    /attention required!\s*\|\s*cloudflare/i,
+    /just a moment\.\.\./i,
+    /security check to access/i,
+  ];
+
+  const isWallDetected = LOGIN_BOT_WALL_PATTERNS.some((p) => p.test(markdown));
+
+  if (
+    isWallDetected &&
+    (jsonLdDescriptor ||
+      fallbackDescription ||
+      metaDescription ||
+      ogTitle ||
+      (articleTitle && articleTitle !== 'Untitled') ||
+      fallbackTitle !== 'Untitled')
+  ) {
+    const bestTitle =
+      fallbackTitle && fallbackTitle !== 'Untitled'
+        ? fallbackTitle
+        : (articleTitle && articleTitle !== 'Untitled' ? articleTitle : ogTitle || fallbackTitle);
+
+    const summaryText =
+      jsonLdDescriptor ||
+      fallbackDescription?.trim() ||
+      (metaDescription && !LOGIN_BOT_WALL_PATTERNS.some((p) => p.test(metaDescription))
+        ? metaDescription
+        : null) ||
+      (!LOGIN_BOT_WALL_PATTERNS.some((p) => p.test(articleExcerpt || ''))
+        ? articleExcerpt
+        : null) ||
+      'Tidak ada deskripsi tambahan pada metadata halaman ini.';
+
+    markdown = [
+      `> [!NOTE]`,
+      `> Target URL dilindungi sesi login atau verifikasi anti-bot. Konten berikut berhasil diekstrak secara otomatis dari metadata SSR sebelum dialog intervensi aktif.`,
+      ``,
+      `# ${bestTitle}`,
+      ``,
+      `**Deskripsi / Ringkasan:**`,
+      summaryText,
+    ].join('\n\n');
+
+    articleTitle = bestTitle;
+    articleExcerpt = summaryText;
+  }
 
   return {
     title: articleTitle,

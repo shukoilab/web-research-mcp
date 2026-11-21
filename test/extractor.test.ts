@@ -128,5 +128,71 @@ describe('Content Extractor & Markdown Pipeline', () => {
       expect(result.markdown).toContain('### Short Notice');
       expect(result.markdown).toContain('Notice text content in main container.');
     });
+
+    it('detects login walls or bot verification gates and preserves pre-rendered SSR title and meta descriptions', async () => {
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>PC HP EliteDesk 800 G5 SFF Core i5</title>
+            <meta name="description" content="Beli PC HP EliteDesk 800 G5 RAM 16GB SSD 512GB Murah Bergaransi." />
+            <meta property="og:title" content="PC HP EliteDesk 800 G5 SFF Core i5" />
+          </head>
+          <body>
+            <div id="modal">
+              <h2>Masuk Diperlukan</h2>
+              <p>Sepertinya Anda belum masuk. Masuk untuk melanjutkan.</p>
+            </div>
+          </body>
+        </html>
+      `;
+
+      const result = await extractContentToMarkdown(
+        html,
+        'PC HP EliteDesk 800 G5 SFF Core i5 - Toko Resmi',
+      );
+      expect(result.title).toContain('PC HP EliteDesk 800 G5');
+      expect(result.excerpt).toContain('Beli PC HP EliteDesk 800 G5');
+      expect(result.markdown).toContain('Target URL dilindungi sesi login');
+      expect(result.markdown).toContain('PC HP EliteDesk 800 G5');
+      expect(result.markdown).toContain('Beli PC HP EliteDesk 800 G5');
+    });
+
+    it('extracts structured JSON-LD product data when page is intercepted by bot/login gate', async () => {
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Gaming Laptop RTX 4080</title>
+            <script type="application/ld+json">
+              {
+                "@context": "https://schema.org",
+                "@type": "Product",
+                "name": "Super Gaming Laptop RTX 4080 32GB",
+                "brand": { "@type": "Brand", "name": "TechCorp" },
+                "description": "High performance laptop with RTX 4080 and 32GB RAM.",
+                "offers": {
+                  "@type": "Offer",
+                  "price": "25000000",
+                  "priceCurrency": "IDR"
+                }
+              }
+            </script>
+          </head>
+          <body>
+            <div id="modal">
+              <h2>Login Required</h2>
+              <p>Please sign in to view this product.</p>
+            </div>
+          </body>
+        </html>
+      `;
+
+      const result = await extractContentToMarkdown(html);
+      expect(result.markdown).toContain('Target URL dilindungi sesi login');
+      expect(result.markdown).toContain('**Produk:** Super Gaming Laptop RTX 4080 32GB');
+      expect(result.markdown).toContain('**Merek:** TechCorp');
+      expect(result.markdown).toContain('**Harga:** IDR 25000000');
+    });
   });
 });
