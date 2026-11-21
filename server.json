@@ -3,7 +3,7 @@
   "name": "io.github.shukoilab/web-research-mcp",
   "title": "Web Research MCP Server",
   "description": "Stealth Google Search and token-efficient web content extraction with undetected browser automation.",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "websiteUrl": "https://github.com/shukoilab/web-research-mcp#readme",
   "repository": {
     "url": "https://github.com/shukoilab/web-research-mcp",
@@ -13,7 +13,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/shukoilab/web-research-mcp:2.1.0",
+      "identifier": "ghcr.io/shukoilab/web-research-mcp:2.1.1",
       "transport": {
         "type": "stdio"
       },
