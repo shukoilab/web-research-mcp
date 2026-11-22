@@ -8,6 +8,56 @@
 import { DomainError } from '@shukoi/core';
 
 /**
+ * @purpose Enumeration of categorized reasons why a candidate URL is rejected by SSRF or format checks.
+ * @rationale Enables callers to perform exhaustive compiler-checked handling without brittle error string parsing.
+ * @preconditions None.
+ * @invariants Closed union of string literal tokens; immutable type.
+ */
+export type UrlRejectionKind = 'EMPTY' | 'MALFORMED' | 'PROTOCOL' | 'INTERNAL_HOST' | 'PRIVATE_IP';
+
+/**
+ * @purpose Discriminated union result of pure public URL validation.
+ * @rationale Delivers parsed URL instance on success or typed rejection reason on failure without throwing exceptions.
+ * @preconditions Candidate URL string provided to validator.
+ * @invariants Discriminated by boolean property 'ok'.
+ */
+export type UrlCheckResult =
+  | { readonly ok: true; readonly url: URL }
+  | { readonly ok: false; readonly reason: UrlRejectionKind };
+
+/**
+ * @purpose Contextual metadata required for generating legacy-compatible error messages.
+ * @rationale Preserves byte-identical DomainError messages when delegating from validatePublicUrl.
+ * @preconditions Populated only on URL rejection during throw delegation.
+ * @invariants Readonly parameter bundle; Big-O time complexity O(1).
+ */
+export interface RejectionMessageInfo {
+  readonly candidate: string;
+  readonly protocol?: string;
+  readonly hostname?: string;
+  readonly isIpv6?: boolean;
+}
+
+/**
+ * @purpose Mapping of rejection kind to message formatter generating exact legacy error strings.
+ * @rationale Guarantees 100% backward compatibility for validatePublicUrl callers expecting existing exception messages.
+ * @preconditions Valid UrlRejectionKind key and populated RejectionMessageInfo.
+ * @invariants Big-O time complexity O(1); pure string interpolation.
+ */
+export const MESSAGE_FOR: Record<UrlRejectionKind, (info: RejectionMessageInfo) => string> = {
+  EMPTY: () => 'Target URL must be a non-empty string',
+  MALFORMED: (info) => `Malformed URL provided: "${info.candidate}"`,
+  PROTOCOL: (info) =>
+    `Unsupported protocol: "${info.protocol ?? ''}". Only HTTP and HTTPS are permitted`,
+  INTERNAL_HOST: (info) =>
+    `Access to internal or local hostname "${info.hostname ?? ''}" is prohibited`,
+  PRIVATE_IP: (info) =>
+    info.isIpv6
+      ? `Access to private or reserved IPv6 address "${info.hostname ?? ''}" is prohibited`
+      : `Access to private or reserved IP address "${info.hostname ?? ''}" is prohibited`,
+};
+
+/**
  * @purpose Checks whether a numerical IPv4 address belongs to a reserved or private subnet.
  * @rationale Prevents internal service scanning and lateral movement to internal network infrastructure.
  * @preconditions ip is a dotted-decimal IPv4 string (e.g., "192.168.1.1").
@@ -87,32 +137,29 @@ export function isPrivateIpv6(ipv6: string): boolean {
 }
 
 /**
- * @purpose Validates that a candidate URL targets a legitimate, publicly accessible HTTP/HTTPS endpoint.
- * @rationale Shields web research crawlers from SSRF exploits, local port scanning, and cloud metadata theft.
- * @preconditions candidate is a non-empty string URL.
+ * @purpose Pure classifier inspecting whether a candidate URL targets a public HTTP/HTTPS endpoint.
+ * @rationale Provides zero-throw, typed evaluation of candidate URLs for secure navigation pipelines.
+ * @preconditions candidate is a string URL.
  * @param candidate Raw candidate URL string.
- * @returns Validated URL object ready for navigation.
- * @throws DomainError BAD_REQUEST if candidate is malformed, uses non-HTTP protocols, or resolves to private/loopback/cloud metadata targets.
+ * @returns UrlCheckResult discriminated union ({ ok: true, url: URL } | { ok: false, reason: UrlRejectionKind }).
+ * @throws Never throws directly; purely functional.
  * @invariants Strict zero-trust validation; pure function; Big-O time complexity O(1).
  */
-export function validatePublicUrl(candidate: string): URL {
+export function checkPublicUrl(candidate: string): UrlCheckResult {
   if (!candidate || typeof candidate !== 'string' || candidate.trim() === '') {
-    throw new DomainError('BAD_REQUEST', 'Target URL must be a non-empty string');
+    return { ok: false, reason: 'EMPTY' };
   }
 
   let parsed: URL;
   try {
     parsed = new URL(candidate.trim());
   } catch {
-    throw new DomainError('BAD_REQUEST', `Malformed URL provided: "${candidate}"`);
+    return { ok: false, reason: 'MALFORMED' };
   }
 
   // 1. Enforce strict HTTP/HTTPS protocols
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new DomainError(
-      'BAD_REQUEST',
-      `Unsupported protocol: "${parsed.protocol}". Only HTTP and HTTPS are permitted`,
-    );
+    return { ok: false, reason: 'PROTOCOL' };
   }
 
   const hostname = parsed.hostname.toLowerCase();
@@ -126,32 +173,63 @@ export function validatePublicUrl(candidate: string): URL {
     hostname === 'metadata.google.internal' ||
     hostname === 'instance-data'
   ) {
-    throw new DomainError(
-      'BAD_REQUEST',
-      `Access to internal or local hostname "${hostname}" is prohibited`,
-    );
+    return { ok: false, reason: 'INTERNAL_HOST' };
   }
 
   // 3. Reject private IPv4 subnets
   const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
   if (ipv4Regex.test(hostname)) {
     if (isPrivateIpv4(hostname)) {
-      throw new DomainError(
-        'BAD_REQUEST',
-        `Access to private or reserved IP address "${hostname}" is prohibited`,
-      );
+      return { ok: false, reason: 'PRIVATE_IP' };
     }
   }
 
   // 4. Reject private IPv6 ranges
   if (hostname.startsWith('[') || hostname.includes(':')) {
     if (isPrivateIpv6(hostname)) {
-      throw new DomainError(
-        'BAD_REQUEST',
-        `Access to private or reserved IPv6 address "${hostname}" is prohibited`,
-      );
+      return { ok: false, reason: 'PRIVATE_IP' };
     }
   }
 
-  return parsed;
+  return { ok: true, url: parsed };
+}
+
+/**
+ * @purpose Validates that a candidate URL targets a legitimate, publicly accessible HTTP/HTTPS endpoint.
+ * @rationale Shields web research crawlers from SSRF exploits, local port scanning, and cloud metadata theft, throwing DomainError on violation.
+ * @preconditions candidate is a non-empty string URL.
+ * @param candidate Raw candidate URL string.
+ * @returns Validated URL object ready for navigation.
+ * @throws DomainError BAD_REQUEST if candidate is malformed, uses non-HTTP protocols, or resolves to private/loopback/cloud metadata targets.
+ * @invariants Delegates to checkPublicUrl; produces byte-identical legacy error messages; Big-O time complexity O(1).
+ */
+export function validatePublicUrl(candidate: string): URL {
+  const result = checkPublicUrl(candidate);
+  if (result.ok) {
+    return result.url;
+  }
+
+  let info: RejectionMessageInfo = { candidate };
+  if (
+    result.reason === 'PROTOCOL' ||
+    result.reason === 'INTERNAL_HOST' ||
+    result.reason === 'PRIVATE_IP'
+  ) {
+    try {
+      const parsed = new URL(candidate.trim());
+      const hostname = parsed.hostname.toLowerCase();
+      const isIpv6 = hostname.startsWith('[') || hostname.includes(':');
+      info = {
+        candidate,
+        protocol: parsed.protocol,
+        hostname,
+        isIpv6,
+      };
+    } catch {
+      // Invariant: parsed URL was already successful in checkPublicUrl
+    }
+  }
+
+  const formatter = MESSAGE_FOR[result.reason];
+  throw new DomainError('BAD_REQUEST', formatter(info));
 }

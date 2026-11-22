@@ -1,6 +1,11 @@
 import { DomainError } from '@shukoi/core';
 import { describe, expect, it } from 'vitest';
-import { isPrivateIpv4, isPrivateIpv6, validatePublicUrl } from '../src/services/ssrf.js';
+import {
+  checkPublicUrl,
+  isPrivateIpv4,
+  isPrivateIpv6,
+  validatePublicUrl,
+} from '../src/services/ssrf.js';
 
 describe('SSRF Protection Service', () => {
   describe('isPrivateIpv4', () => {
@@ -27,6 +32,8 @@ describe('SSRF Protection Service', () => {
     it('identifies private and loopback IPv6 addresses', () => {
       expect(isPrivateIpv6('::1')).toBe(true);
       expect(isPrivateIpv6('[::1]')).toBe(true);
+      // Fully-expanded loopback form must stay rejected (defense in depth)
+      expect(isPrivateIpv6('0000:0000:0000:0000:0000:0000:0000:0001')).toBe(true);
       expect(isPrivateIpv6('fc00::1')).toBe(true);
       expect(isPrivateIpv6('fe80::1')).toBe(true);
       expect(isPrivateIpv6('::ffff:127.0.0.1')).toBe(true);
@@ -82,6 +89,122 @@ describe('SSRF Protection Service', () => {
     it('rejects empty or malformed strings', () => {
       expect(() => validatePublicUrl('')).toThrowError(DomainError);
       expect(() => validatePublicUrl('not-a-valid-url')).toThrowError(DomainError);
+    });
+  });
+
+  describe('checkPublicUrl & validatePublicUrl compatibility pin', () => {
+    it('handles valid public URLs', () => {
+      const result = checkPublicUrl('https://example.com/test');
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.url.href).toBe('https://example.com/test');
+        expect(result.url.protocol).toBe('https:');
+        expect(result.url.hostname).toBe('example.com');
+      }
+    });
+
+    it('pins EMPTY rejection kind and exact legacy error string', () => {
+      expect(checkPublicUrl('')).toEqual({ ok: false, reason: 'EMPTY' });
+      expect(checkPublicUrl('   ')).toEqual({ ok: false, reason: 'EMPTY' });
+
+      try {
+        validatePublicUrl('');
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe('Target URL must be a non-empty string');
+      }
+    });
+
+    it('pins MALFORMED rejection kind and exact legacy error string', () => {
+      const candidate = 'not-a-valid-url';
+      expect(checkPublicUrl(candidate)).toEqual({ ok: false, reason: 'MALFORMED' });
+
+      try {
+        validatePublicUrl(candidate);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe(`Malformed URL provided: "${candidate}"`);
+      }
+    });
+
+    it('pins PROTOCOL rejection kind and exact legacy error string', () => {
+      const candidate = 'ftp://example.com/file';
+      expect(checkPublicUrl(candidate)).toEqual({ ok: false, reason: 'PROTOCOL' });
+
+      try {
+        validatePublicUrl(candidate);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe(
+          'Unsupported protocol: "ftp:". Only HTTP and HTTPS are permitted',
+        );
+      }
+    });
+
+    it('pins INTERNAL_HOST rejection kind and exact legacy error string', () => {
+      const candidateLocal = 'http://localhost:3000';
+      expect(checkPublicUrl(candidateLocal)).toEqual({ ok: false, reason: 'INTERNAL_HOST' });
+
+      try {
+        validatePublicUrl(candidateLocal);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe(
+          'Access to internal or local hostname "localhost" is prohibited',
+        );
+      }
+
+      const candidateMeta = 'http://metadata.google.internal/computeMetadata/v1';
+      expect(checkPublicUrl(candidateMeta)).toEqual({ ok: false, reason: 'INTERNAL_HOST' });
+
+      try {
+        validatePublicUrl(candidateMeta);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe(
+          'Access to internal or local hostname "metadata.google.internal" is prohibited',
+        );
+      }
+    });
+
+    it('pins PRIVATE_IP rejection kind and exact legacy error string (IPv4 and IPv6)', () => {
+      const candidateIpv4 = 'http://127.0.0.1:8080/admin';
+      expect(checkPublicUrl(candidateIpv4)).toEqual({ ok: false, reason: 'PRIVATE_IP' });
+
+      try {
+        validatePublicUrl(candidateIpv4);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe(
+          'Access to private or reserved IP address "127.0.0.1" is prohibited',
+        );
+      }
+
+      const candidateIpv6 = 'http://[::1]:9000/internal';
+      expect(checkPublicUrl(candidateIpv6)).toEqual({ ok: false, reason: 'PRIVATE_IP' });
+
+      try {
+        validatePublicUrl(candidateIpv6);
+        expect.unreachable();
+      } catch (err) {
+        expect(err).toBeInstanceOf(DomainError);
+        expect((err as DomainError).code).toBe('BAD_REQUEST');
+        expect((err as DomainError).message).toBe(
+          'Access to private or reserved IPv6 address "[::1]" is prohibited',
+        );
+      }
     });
   });
 });

@@ -7,6 +7,7 @@
  */
 
 import { compileMcpCatalog, startStdioServer } from '@shukoi/mcp/stdio';
+import { deepResearchAction } from '../actions/deep-research.js';
 import { googleSearchAction } from '../actions/google-search.js';
 import { healthAction } from '../actions/health.js';
 import { webExtractAction } from '../actions/web-extract.js';
@@ -18,7 +19,12 @@ import { BrowserManager } from '../services/browser.js';
  * @rationale Freezes action schemas at server boot to guarantee zero runtime schema compiling overhead.
  * @invariants Deeply frozen McpCatalog instance.
  */
-export const catalog = compileMcpCatalog([healthAction, googleSearchAction, webExtractAction]);
+export const catalog = compileMcpCatalog([
+  healthAction,
+  googleSearchAction,
+  webExtractAction,
+  deepResearchAction,
+]);
 
 /**
  * @purpose Active STDIO server instance listening on process.stdin.

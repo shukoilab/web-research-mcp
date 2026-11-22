@@ -7,8 +7,7 @@
 
 import { defineAction } from '@shukoi/core';
 import { FormatRegistry, Type } from '@sinclair/typebox';
-import { BrowserManager, blockHeavyResources, smartScrollAndHydrate } from '../services/browser.js';
-import { extractContentToMarkdown } from '../services/extractor.js';
+import { extractSingleUrlContent } from '../services/extractor.js';
 import { validatePublicUrl } from '../services/ssrf.js';
 
 // Register standard URI format in TypeBox format registry if not already defined
@@ -118,71 +117,18 @@ export const webExtractAction = defineAction({
   async handler(input, ctx) {
     ctx.logger.info('Executing web extract action', { url: input.url });
 
-    // 1. Strict SSRF boundary verification
-    const validatedUrl = validatePublicUrl(input.url);
+    // 1. Strict SSRF boundary verification (kept at action boundary for identical error precedence)
+    validatePublicUrl(input.url);
 
-    // 2. Perform stealth page acquisition, smart auto-scroll, and content retrieval
-    const browserManager = BrowserManager.getInstance();
-
-    const { rawHtml, preHydrationTitle, preHydrationDescription } = await browserManager.withPage(
-      async (page) => {
-        if (input.ultraFast === true) {
-          await blockHeavyResources(page);
-        }
-
-        await page.goto(validatedUrl.toString(), {
-          waitUntil: 'domcontentloaded',
-        });
-
-        // Capture initial pre-hydration document title and meta description before potential client-side SPA redirects or login gates
-        const preMeta = await page
-          .evaluate(() => {
-            const title = document.title || '';
-            const desc =
-              document.querySelector('meta[name="description" i]')?.getAttribute('content') ||
-              document
-                .querySelector('meta[property="og:description" i]')
-                ?.getAttribute('content') ||
-              document
-                .querySelector('meta[name="twitter:description" i]')
-                ?.getAttribute('content') ||
-              '';
-            return { title, desc };
-          })
-          .catch(() => ({ title: '', desc: '' }));
-
-        // Execute smart progressive scrolling for dynamic SPAs and lazy XHR elements
-        if (input.smartScroll !== false) {
-          await smartScrollAndHydrate(page, {
-            maxScrolls: input.maxScrolls,
-            scrollDelayMs: input.scrollDelayMs,
-          });
-        }
-
-        const html = await page.content();
-        return {
-          rawHtml: html,
-          preHydrationTitle: preMeta.title,
-          preHydrationDescription: preMeta.desc,
-        };
-      },
-      {
-        signal: ctx.signal,
-        timeoutMs: input.timeoutMs,
-      },
-    );
-
-    // 3. Extract article, sanitize noise, and compile to high-density Markdown
-    const fallbackTitle =
-      preHydrationTitle && preHydrationTitle.trim() !== ''
-        ? preHydrationTitle.trim()
-        : validatedUrl.hostname;
-
-    const extracted = await extractContentToMarkdown(
-      rawHtml,
-      fallbackTitle,
-      preHydrationDescription,
-    );
+    // 2. Perform stealth page acquisition, smart auto-scroll, and content retrieval via shared extractor service
+    const extracted = await extractSingleUrlContent(input.url, {
+      signal: ctx.signal,
+      timeoutMs: input.timeoutMs,
+      smartScroll: input.smartScroll,
+      scrollDelayMs: input.scrollDelayMs,
+      maxScrolls: input.maxScrolls,
+      ultraFast: input.ultraFast,
+    });
 
     return {
       url: input.url,

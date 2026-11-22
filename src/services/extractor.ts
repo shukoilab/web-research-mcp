@@ -13,6 +13,8 @@ import remarkGfm from 'remark-gfm';
 import remarkStringify from 'remark-stringify';
 import { unified } from 'unified';
 import { webResearchConfig } from '../config.js';
+import { BrowserManager, blockHeavyResources, smartScrollAndHydrate } from './browser.js';
+import { validatePublicUrl } from './ssrf.js';
 
 /**
  * @purpose Structured output result of content extraction.
@@ -277,5 +279,110 @@ export async function extractContentToMarkdown(
     byline: articleByline,
     excerpt: articleExcerpt,
     markdown,
+  };
+}
+
+/**
+ * @purpose Execution options for single URL content extraction.
+ * @rationale Configures crawler navigation behavior, stealth resource blocking, and dynamic DOM hydration.
+ * @invariants Readonly options object.
+ */
+export interface SingleUrlExtractOptions {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+  readonly smartScroll?: boolean;
+  readonly scrollDelayMs?: number;
+  readonly maxScrolls?: number;
+  readonly ultraFast?: boolean;
+}
+
+/**
+ * @purpose Structured output result of single URL content acquisition and extraction.
+ * @rationale Delivers raw HTML alongside extracted Markdown and metadata for consumers.
+ * @invariants Readonly data structure.
+ */
+export interface SingleUrlExtractResult {
+  readonly rawHtml: string;
+  readonly title: string;
+  readonly byline: string | null;
+  readonly excerpt: string | null;
+  readonly markdown: string;
+}
+
+/**
+ * @purpose Navigates to a single public URL and extracts high-density Markdown and metadata.
+ * @rationale Encapsulates stealth browser acquisition, optional heavy resource blocking (ultraFast), pre-hydration metadata capture, dynamic smart-scrolling, and unified Markdown serialization into a reusable service function.
+ * @preconditions Input url must pass validatePublicUrl or be an already-validated URL object; signal (if provided) must not be aborted.
+ * @param url Target HTTP/HTTPS URL string or validated URL object to navigate and extract.
+ * @param opts Optional extraction options (signal, timeoutMs, smartScroll, scrollDelayMs, maxScrolls, ultraFast).
+ * @returns Promise resolving to SingleUrlExtractResult containing rawHtml, title, byline, excerpt, and markdown.
+ * @throws DomainError BAD_REQUEST if URL fails SSRF validation or operation is aborted, GATEWAY_TIMEOUT on navigation timeout, SERVICE_UNAVAILABLE on browser context failure.
+ * @invariants Page handle closed in finally block; semaphore bounded; zero zombie browser processes.
+ */
+export async function extractSingleUrlContent(
+  url: string | URL,
+  opts: SingleUrlExtractOptions = {},
+): Promise<SingleUrlExtractResult> {
+  const validatedUrl = typeof url === 'string' ? validatePublicUrl(url) : url;
+  const browserManager = BrowserManager.getInstance();
+
+  const { rawHtml, preHydrationTitle, preHydrationDescription } = await browserManager.withPage(
+    async (page) => {
+      if (opts.ultraFast === true) {
+        await blockHeavyResources(page);
+      }
+
+      await page.goto(validatedUrl.toString(), {
+        waitUntil: 'domcontentloaded',
+      });
+
+      // Capture initial pre-hydration document title and meta description before potential client-side SPA redirects or login gates
+      const preMeta = await page
+        .evaluate(() => {
+          const title = document.title || '';
+          const desc =
+            document.querySelector('meta[name="description" i]')?.getAttribute('content') ||
+            document.querySelector('meta[property="og:description" i]')?.getAttribute('content') ||
+            document.querySelector('meta[name="twitter:description" i]')?.getAttribute('content') ||
+            '';
+          return { title, desc };
+        })
+        .catch(() => ({ title: '', desc: '' }));
+
+      // Execute smart progressive scrolling for dynamic SPAs and lazy XHR elements
+      if (opts.smartScroll !== false) {
+        await smartScrollAndHydrate(page, {
+          maxScrolls: opts.maxScrolls,
+          scrollDelayMs: opts.scrollDelayMs,
+        });
+      }
+
+      const html = await page.content();
+      return {
+        rawHtml: html,
+        preHydrationTitle: preMeta.title,
+        preHydrationDescription: preMeta.desc,
+      };
+    },
+    {
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs,
+    },
+  );
+
+  // Extract article, sanitize noise, and compile to high-density Markdown
+  const fallbackTitle =
+    preHydrationTitle && preHydrationTitle.trim() !== ''
+      ? preHydrationTitle.trim()
+      : validatedUrl.hostname;
+
+  const extracted = await extractContentToMarkdown(rawHtml, fallbackTitle, preHydrationDescription);
+
+  return {
+    rawHtml,
+    title: extracted.title,
+    byline: extracted.byline,
+    excerpt: extracted.excerpt,
+    markdown: extracted.markdown,
   };
 }

@@ -8,6 +8,7 @@
 import { serve } from '@hono/node-server';
 import { compileMcpCatalog, createMcpHttpHandler } from '@shukoi/mcp/http';
 import { Hono } from 'hono';
+import { deepResearchAction } from '../actions/deep-research.js';
 import { googleSearchAction } from '../actions/google-search.js';
 import { healthAction } from '../actions/health.js';
 import { webExtractAction } from '../actions/web-extract.js';
@@ -27,7 +28,12 @@ export const app = new Hono();
  * @rationale Compiled once at boot to eliminate per-request AST building overhead.
  * @invariants Deeply frozen McpCatalog instance.
  */
-export const catalog = compileMcpCatalog([healthAction, googleSearchAction, webExtractAction]);
+export const catalog = compileMcpCatalog([
+  healthAction,
+  googleSearchAction,
+  webExtractAction,
+  deepResearchAction,
+]);
 
 // Dedicated REST endpoint for Kubernetes, Docker, and external liveness/readiness probes
 app.get('/health', (c) => {

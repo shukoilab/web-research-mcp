@@ -371,7 +371,53 @@ Navigates to any target URL, executes intelligent progressive scrolling to trigg
 
 ---
 
-### 3. `healthCheck` (`healthAction`)
+### 3. `deepResearch` (`deepResearchAction`)
+Executes comprehensive, multi-source deep web research in a single call. Conducts Google Search, extracts top-N canonical search results sequentially into clean GitHub Flavored Markdown, filters boilerplate and anti-bot walls, and truncates results within strict per-result and total token budgets.
+
+**When to Use:**
+- Use `deepResearch` when you need full article content or synthesis across multiple sources for a research topic in one round-trip.
+- Use `googleSearch` when exploring queries, triaging candidate URLs, or needing snippets only.
+- Use `webExtract` when the target URL is already known and requires surgical single-page extraction.
+
+**Input Parameters:**
+- `query` (*string, required, 1..500 chars*): Search keywords or research query.
+- `limit` (*integer, optional, 1..10, default: 5*): Maximum search results to extract sequentially.
+- `language` (*string, optional, default: "en"*): Language code (e.g. `"en"`, `"id"`).
+- `country` (*string, optional, default: "us"*): Geolocation region code (e.g. `"us"`, `"id"`).
+- `safeSearch` (*boolean, optional, default: true*): SafeSearch adult filter.
+- `ultraFast` (*boolean, optional, default: true*): Block images, external CSS, fonts, and media. Defaults to `true` for deep research to maximize extraction throughput (set `false` if target pages gate content behind CSS visibility).
+- `smartScroll` (*boolean, optional, default: true*): Automatically scroll and wait for lazy-loaded XHR data to settle.
+- `scrollDelayMs` (*integer, optional, 100..5000, default: 500*): Debounce wait time in milliseconds after each scroll step.
+- `maxScrolls` (*integer, optional, 0..20, default: 6*): Maximum scroll step iterations for lazy content hydration.
+- `timeoutMs` (*integer, optional, 1000..60000, default: 30000*): Per-page navigation timeout in milliseconds.
+- `maxCharsPerResult` (*integer, optional, 1000..100000, default: 20000*): Maximum character length per extracted article before truncation.
+- `maxTotalChars` (*integer, optional, 10000..500000, default: 100000*): Maximum total character budget across all extracted articles.
+
+**Example Tool Response:**
+```json
+{
+  "query": "patchright vs playwright",
+  "totalFound": 2,
+  "totalReturned": 2,
+  "excludedCount": 0,
+  "errors": [],
+  "results": [
+    {
+      "title": "Patchright Documentation",
+      "url": "https://github.com/Kaliiiiiiiiii-Vinyzu/patchright",
+      "markdown": "# Patchright\n\nThe undetected driver for browser automation...",
+      "truncated": false
+    }
+  ],
+  "timestamp": "2026-11-22T14:00:00.000Z"
+}
+```
+
+> **Invariant Guarantee:** `totalReturned + excludedCount === totalFound` is guaranteed on every call. If any URL fails navigation, SSRF verification, or content extraction, it is discarded into `errors[]` with a short coded reason (`ssrf_blocked`, `invalid_url`, `timeout`, `empty_content`, `budget_exceeded`), allowing the remaining batch to complete reliably.
+
+---
+
+### 4. `healthCheck` (`healthAction`)
 Inspects real-time subsystem readiness, browser pool connectivity, active concurrency, and memory consumption.
 
 **Example Output:**
