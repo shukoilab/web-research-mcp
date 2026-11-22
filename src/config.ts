@@ -166,7 +166,7 @@ export const webResearchConfig: WebResearchConfig = Object.freeze({
 export const config: ShukoiConfig = createDefaultConfig({
   observability: {
     serviceName: 'mcp-web-research',
-    serviceVersion: '2.1.1',
+    serviceVersion: '2.2.0',
   },
   security: {
     allowedHosts: webResearchConfig.allowedHosts,
