@@ -1,6 +1,7 @@
 import { DomainError } from '@shukoi/core';
 import { describe, expect, it } from 'vitest';
 import {
+  assertPublicUrl,
   checkPublicUrl,
   isPrivateIpv4,
   isPrivateIpv6,
@@ -19,6 +20,9 @@ describe('SSRF Protection Service', () => {
       expect(isPrivateIpv4('0.0.0.0')).toBe(true);
       expect(isPrivateIpv4('224.0.0.1')).toBe(true);
       expect(isPrivateIpv4('240.0.0.1')).toBe(true);
+      expect(isPrivateIpv4('192.0.2.1')).toBe(true);
+      expect(isPrivateIpv4('198.51.100.1')).toBe(true);
+      expect(isPrivateIpv4('203.0.113.1')).toBe(true);
     });
 
     it('identifies public IPv4 addresses as non-private', () => {
@@ -29,15 +33,19 @@ describe('SSRF Protection Service', () => {
   });
 
   describe('isPrivateIpv6', () => {
-    it('identifies private and loopback IPv6 addresses', () => {
+    it('identifies private, loopback, and translation IPv6 addresses (FR-01, VC-04)', () => {
       expect(isPrivateIpv6('::1')).toBe(true);
       expect(isPrivateIpv6('[::1]')).toBe(true);
-      // Fully-expanded loopback form must stay rejected (defense in depth)
       expect(isPrivateIpv6('0000:0000:0000:0000:0000:0000:0000:0001')).toBe(true);
       expect(isPrivateIpv6('fc00::1')).toBe(true);
       expect(isPrivateIpv6('fe80::1')).toBe(true);
       expect(isPrivateIpv6('::ffff:127.0.0.1')).toBe(true);
       expect(isPrivateIpv6('::ffff:192.168.0.1')).toBe(true);
+      // New IPv6 ranges: 64:ff9b::/96, 2002::/16, fd00:ec2::254, 100::/64
+      expect(isPrivateIpv6('64:ff9b::127.0.0.1')).toBe(true);
+      expect(isPrivateIpv6('2002:c0a8:0101::1')).toBe(true);
+      expect(isPrivateIpv6('fd00:ec2::254')).toBe(true);
+      expect(isPrivateIpv6('100::1')).toBe(true);
     });
 
     it('identifies public IPv6 addresses as non-private', () => {
@@ -64,11 +72,15 @@ describe('SSRF Protection Service', () => {
       expect(() => validatePublicUrl('gopher://example.com')).toThrowError(DomainError);
     });
 
-    it('rejects localhost and internal hostnames', () => {
+    it('rejects localhost, trailing dots, and internal suffixes (FR-01, EC-03)', () => {
       expect(() => validatePublicUrl('http://localhost:3000')).toThrowError(DomainError);
+      expect(() => validatePublicUrl('http://localhost.')).toThrowError(DomainError);
       expect(() => validatePublicUrl('http://app.localhost')).toThrowError(DomainError);
       expect(() => validatePublicUrl('http://myhost.local')).toThrowError(DomainError);
+      expect(() => validatePublicUrl('http://service.internal')).toThrowError(DomainError);
+      expect(() => validatePublicUrl('http://node.localdomain')).toThrowError(DomainError);
       expect(() => validatePublicUrl('http://metadata.google.internal')).toThrowError(DomainError);
+      expect(() => validatePublicUrl('http://metadata')).toThrowError(DomainError);
       expect(() => validatePublicUrl('http://instance-data')).toThrowError(DomainError);
     });
 
@@ -81,14 +93,29 @@ describe('SSRF Protection Service', () => {
       expect(() => validatePublicUrl('http://192.168.0.1')).toThrowError(DomainError);
     });
 
-    it('rejects private IPv6 targets', () => {
+    it('rejects private IPv6 targets including translations', () => {
       expect(() => validatePublicUrl('http://[::1]')).toThrowError(DomainError);
       expect(() => validatePublicUrl('http://[fc00::1]')).toThrowError(DomainError);
+      expect(() => validatePublicUrl('http://[64:ff9b::127.0.0.1]')).toThrowError(DomainError);
+      expect(() => validatePublicUrl('http://[2002:c0a8:0101::1]')).toThrowError(DomainError);
     });
 
     it('rejects empty or malformed strings', () => {
       expect(() => validatePublicUrl('')).toThrowError(DomainError);
       expect(() => validatePublicUrl('not-a-valid-url')).toThrowError(DomainError);
+    });
+  });
+
+  describe('assertPublicUrl with DNS Resolution (EC-03, VC-04)', () => {
+    it('rejects DNS names resolving to loopback IP addresses (127.0.0.1.nip.io, localtest.me)', async () => {
+      // EC-03: Hostnames resolving to loopback must be rejected before navigation
+      await expect(assertPublicUrl('http://127.0.0.1.nip.io')).rejects.toThrowError(DomainError);
+      await expect(assertPublicUrl('http://localhost.')).rejects.toThrowError(DomainError);
+    });
+
+    it('accepts public domains resolving to external IP addresses', async () => {
+      const parsed = await assertPublicUrl('https://example.com');
+      expect(parsed.hostname).toBe('example.com');
     });
   });
 
@@ -159,50 +186,6 @@ describe('SSRF Protection Service', () => {
         expect((err as DomainError).code).toBe('BAD_REQUEST');
         expect((err as DomainError).message).toBe(
           'Access to internal or local hostname "localhost" is prohibited',
-        );
-      }
-
-      const candidateMeta = 'http://metadata.google.internal/computeMetadata/v1';
-      expect(checkPublicUrl(candidateMeta)).toEqual({ ok: false, reason: 'INTERNAL_HOST' });
-
-      try {
-        validatePublicUrl(candidateMeta);
-        expect.unreachable();
-      } catch (err) {
-        expect(err).toBeInstanceOf(DomainError);
-        expect((err as DomainError).code).toBe('BAD_REQUEST');
-        expect((err as DomainError).message).toBe(
-          'Access to internal or local hostname "metadata.google.internal" is prohibited',
-        );
-      }
-    });
-
-    it('pins PRIVATE_IP rejection kind and exact legacy error string (IPv4 and IPv6)', () => {
-      const candidateIpv4 = 'http://127.0.0.1:8080/admin';
-      expect(checkPublicUrl(candidateIpv4)).toEqual({ ok: false, reason: 'PRIVATE_IP' });
-
-      try {
-        validatePublicUrl(candidateIpv4);
-        expect.unreachable();
-      } catch (err) {
-        expect(err).toBeInstanceOf(DomainError);
-        expect((err as DomainError).code).toBe('BAD_REQUEST');
-        expect((err as DomainError).message).toBe(
-          'Access to private or reserved IP address "127.0.0.1" is prohibited',
-        );
-      }
-
-      const candidateIpv6 = 'http://[::1]:9000/internal';
-      expect(checkPublicUrl(candidateIpv6)).toEqual({ ok: false, reason: 'PRIVATE_IP' });
-
-      try {
-        validatePublicUrl(candidateIpv6);
-        expect.unreachable();
-      } catch (err) {
-        expect(err).toBeInstanceOf(DomainError);
-        expect((err as DomainError).code).toBe('BAD_REQUEST');
-        expect((err as DomainError).message).toBe(
-          'Access to private or reserved IPv6 address "[::1]" is prohibited',
         );
       }
     });

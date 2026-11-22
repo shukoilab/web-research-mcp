@@ -1,6 +1,6 @@
 /**
  * @purpose Protocol-agnostic Google Search action (`googleSearchAction`) exposed over REST and MCP.
- * @rationale Exposes stealth Google Search capabilities to LLMs and HTTP clients with strict schema validation, context-aware smart chaining heuristics, and abort signal propagation.
+ * @rationale Exposes stealth Google Search capabilities to LLMs and HTTP clients with strict schema validation, web-only udm=14 targeting, and abort signal propagation.
  * @preconditions Input must satisfy TypeBox constraints; stealth browser backend must be functional.
  * @invariants Pure Web-Standard action; zero node:* imports; additionalProperties: false enforced on all schemas.
  */
@@ -12,7 +12,7 @@ import { executeGoogleSearch } from '../services/search.js';
 /**
  * @purpose Google Search action definition implementing the Shukoi action contract.
  * @rationale Enables agents and clients to perform organic web searches with rich metadata and canonical URL resolution, acting as Discovery (Step 1) in research workflows.
- * @invariants Strict TypeBox schema contract; zero console.log invocations; propagates ctx.signal.
+ * @invariants Strict TypeBox schema contract; zero console.log invocations; propagates ctx.signal; maximum limit 10.
  */
 export const googleSearchAction = defineAction({
   name: 'googleSearch',
@@ -45,9 +45,9 @@ export const googleSearchAction = defineAction({
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
-          maximum: 50,
+          maximum: 10,
           default: 10,
-          description: 'Maximum number of organic search results to return (1-50, default: 10)',
+          description: 'Maximum number of organic search results to return (1-10, default: 10)',
         }),
       ),
       language: Type.Optional(

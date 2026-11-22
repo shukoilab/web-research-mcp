@@ -36,6 +36,17 @@ describe('Shukoi Action Tri-Transport Parity & Contracts', () => {
       });
     });
 
+    it('rejects limit exceeding 10 with VALIDATION_ERROR per D3', async () => {
+      await expect(
+        harness.execute(googleSearchAction, {
+          query: 'valid query',
+          limit: 15,
+        }),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      });
+    });
+
     it('rejects additional unexpected properties on input', async () => {
       await expect(
         harness.execute(googleSearchAction, {
@@ -201,14 +212,18 @@ describe('Shukoi Action Tri-Transport Parity & Contracts', () => {
       ).rejects.toThrowError(DomainError);
     });
 
-    it('accepts ultraFast and still returns Markdown', async () => {
+    it('accepts ultraFast and returns structured Markdown with additive fields', async () => {
       const result = await harness.execute(webExtractAction, {
         url: 'https://example.com',
         ultraFast: true,
       });
       expect(result.url).toBe('https://example.com');
+      expect(result.finalUrl).toBeDefined();
       expect(result.title).toContain('Example Domain');
       expect(result.markdown).toContain('documentation examples');
+      expect(typeof result.redirectCount).toBe('number');
+      expect(typeof result.truncated).toBe('boolean');
+      expect(typeof result.blocked).toBe('boolean');
     }, 25000);
 
     it('rejects non-boolean ultraFast', async () => {
@@ -222,13 +237,17 @@ describe('Shukoi Action Tri-Transport Parity & Contracts', () => {
       });
     });
 
-    it('executes web extraction on a valid URL and returns structured Markdown', async () => {
+    it('executes web extraction on a valid URL and returns structured Markdown with additive fields', async () => {
       const result = await harness.execute(webExtractAction, {
         url: 'https://example.com',
       });
       expect(result.url).toBe('https://example.com');
+      expect(result.finalUrl).toBeDefined();
       expect(result.title).toContain('Example Domain');
       expect(result.markdown).toContain('documentation examples');
+      expect(typeof result.redirectCount).toBe('number');
+      expect(typeof result.truncated).toBe('boolean');
+      expect(typeof result.blocked).toBe('boolean');
     }, 25000);
   });
 });

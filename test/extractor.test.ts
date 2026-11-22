@@ -3,9 +3,21 @@ import {
   compressMarkdown,
   convertHtmlToMarkdown,
   extractContentToMarkdown,
+  hasViableContent,
+  truncateMarkdown,
 } from '../src/services/extractor.js';
 
 describe('Content Extractor & Markdown Pipeline', () => {
+  describe('hasViableContent (near-empty anti-bot interstitials)', () => {
+    it('rejects interstitials below the threshold and accepts real content at the boundary', () => {
+      expect(hasViableContent('!!!!', 20)).toBe(false);
+      expect(hasViableContent('   \n\t ', 20)).toBe(false);
+      expect(hasViableContent('1234567890123456789', 20)).toBe(false);
+      expect(hasViableContent('12345678901234567890', 20)).toBe(true);
+      expect(hasViableContent('  padded content that is long enough  ', 20)).toBe(true);
+    });
+  });
+
   describe('compressMarkdown', () => {
     it('collapses multiple blank lines into standard paragraph spacing', () => {
       const input = 'Line 1\n\n\n\n\nLine 2';
@@ -17,6 +29,26 @@ describe('Content Extractor & Markdown Pipeline', () => {
       const output = compressMarkdown(input);
       expect(output).not.toContain('[]()');
       expect(output).toContain('---');
+    });
+  });
+
+  describe('truncateMarkdown (FR-15, EC-14)', () => {
+    it('returns exact markdown without truncation when within size budget', () => {
+      const input = '## Clean Paragraph\n\nShort content.';
+      const res = truncateMarkdown(input, 500);
+      expect(res.text).toBe(input);
+      expect(res.truncated).toBe(false);
+    });
+
+    it('cuts markdown at paragraph boundary without corrupting surrogate pairs', () => {
+      const p1 = 'First section text with details.';
+      const p2 = 'Second section text with emoji 🚀.';
+      const input = `${p1}\n\n${p2}`;
+      const res = truncateMarkdown(input, p1.length + 5);
+      expect(res.truncated).toBe(true);
+      expect(res.text).toContain(p1);
+      expect(res.text).not.toContain(p2);
+      expect(res.text).toContain('[Content truncated due to size budget]');
     });
   });
 
@@ -62,6 +94,32 @@ describe('Content Extractor & Markdown Pipeline', () => {
   });
 
   describe('extractContentToMarkdown', () => {
+    it('absolutizes relative href, src, and srcset against finalUrl (FR-05)', async () => {
+      const html = `
+        <html>
+          <head><title>Absolutize Test</title></head>
+          <body>
+            <main>
+              <h1>Relative Links Page</h1>
+              <p>Check out our <a href="subpage.html">Subpage</a>.</p>
+              <img src="images/photo.jpg" alt="Photo" />
+              <img srcset="pic-1x.jpg 1x, pic-2x.jpg 2x" alt="Responsive" />
+            </main>
+          </body>
+        </html>
+      `;
+
+      const result = await extractContentToMarkdown(
+        html,
+        'Absolutize Test',
+        undefined,
+        'https://example.com/docs/intro.html',
+      );
+
+      expect(result.markdown).toContain('[Subpage](https://example.com/docs/subpage.html)');
+      expect(result.markdown).toContain('https://example.com/docs/images/photo.jpg');
+    });
+
     it('extracts title and readable article body from structured article HTML', async () => {
       const html = `
         <!DOCTYPE html>
@@ -129,7 +187,7 @@ describe('Content Extractor & Markdown Pipeline', () => {
       expect(result.markdown).toContain('Notice text content in main container.');
     });
 
-    it('detects login walls or bot verification gates and preserves pre-rendered SSR title and meta descriptions', async () => {
+    it('detects login walls without fabricating product fields and sets blocked: true (FR-18)', async () => {
       const html = `
         <!DOCTYPE html>
         <html>
@@ -151,48 +209,10 @@ describe('Content Extractor & Markdown Pipeline', () => {
         html,
         'PC HP EliteDesk 800 G5 SFF Core i5 - Toko Resmi',
       );
-      expect(result.title).toContain('PC HP EliteDesk 800 G5');
-      expect(result.excerpt).toContain('Beli PC HP EliteDesk 800 G5');
-      expect(result.markdown).toContain('Target URL dilindungi sesi login');
-      expect(result.markdown).toContain('PC HP EliteDesk 800 G5');
-      expect(result.markdown).toContain('Beli PC HP EliteDesk 800 G5');
-    });
-
-    it('extracts structured JSON-LD product data when page is intercepted by bot/login gate', async () => {
-      const html = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>Gaming Laptop RTX 4080</title>
-            <script type="application/ld+json">
-              {
-                "@context": "https://schema.org",
-                "@type": "Product",
-                "name": "Super Gaming Laptop RTX 4080 32GB",
-                "brand": { "@type": "Brand", "name": "TechCorp" },
-                "description": "High performance laptop with RTX 4080 and 32GB RAM.",
-                "offers": {
-                  "@type": "Offer",
-                  "price": "25000000",
-                  "priceCurrency": "IDR"
-                }
-              }
-            </script>
-          </head>
-          <body>
-            <div id="modal">
-              <h2>Login Required</h2>
-              <p>Please sign in to view this product.</p>
-            </div>
-          </body>
-        </html>
-      `;
-
-      const result = await extractContentToMarkdown(html);
-      expect(result.markdown).toContain('Target URL dilindungi sesi login');
-      expect(result.markdown).toContain('**Produk:** Super Gaming Laptop RTX 4080 32GB');
-      expect(result.markdown).toContain('**Merek:** TechCorp');
-      expect(result.markdown).toContain('**Harga:** IDR 25000000');
+      expect(result.blocked).toBe(true);
+      expect(result.blockReason).toContain('Masuk Diperlukan');
+      // Preserves actual page markdown without synthesizing fake notes
+      expect(result.markdown).toContain('Masuk Diperlukan');
     });
   });
 });

@@ -1,11 +1,13 @@
 /**
  * @purpose Multi-source Deep Web Research service orchestrating Google Search and sequential webpage extraction.
- * @rationale Synthesizes search query discovery with bulk full-page article extraction, anti-bot evasion, SSRF protection, and token-efficient Markdown budgeting.
+ * @rationale Synthesizes search query discovery with bulk full-page article extraction, anti-bot evasion, SSRF protection, deadline budget management, and token-efficient Markdown budgeting.
  * @preconditions Chrome binary and Xvfb display :99 must be active.
  * @invariants Pure Web-Standard service; zero node:* imports; sequential execution; invariant totalReturned + excludedCount === totalFound.
  */
 
 import { DomainError } from '@shukoi/core';
+import { webResearchConfig } from '../config.js';
+import { Deadline } from './deadline.js';
 import { extractSingleUrlContent } from './extractor.js';
 import { executeGoogleSearch } from './search.js';
 import { checkPublicUrl, type UrlRejectionKind } from './ssrf.js';
@@ -25,10 +27,10 @@ function assertNever(x: never): never {
 
 /**
  * @purpose Maps a typed SSRF/URL rejection kind to an externally visible error reason code.
- * @rationale Dispatches INTERNAL_HOST and PRIVATE_IP to 'ssrf_blocked', and EMPTY, MALFORMED, and PROTOCOL to 'invalid_url' with compile-time exhaustiveness.
+ * @rationale Dispatches INTERNAL_HOST and PRIVATE_IP to 'ssrf_blocked', DNS_FAILURE to 'dns_failure', and EMPTY, MALFORMED, PROTOCOL to 'invalid_url'.
  * @preconditions kind is a valid UrlRejectionKind.
  * @param kind Rejection category from checkPublicUrl.
- * @returns Short coded reason string ('ssrf_blocked' or 'invalid_url').
+ * @returns Short coded reason string ('ssrf_blocked', 'dns_failure', or 'invalid_url').
  * @throws Never throws directly; compile error if any kind is missing.
  * @invariants Pure mapping; Big-O time complexity O(1).
  */
@@ -37,6 +39,8 @@ function mapRejection(kind: UrlRejectionKind): string {
     case 'INTERNAL_HOST':
     case 'PRIVATE_IP':
       return 'ssrf_blocked';
+    case 'DNS_FAILURE':
+      return 'dns_failure';
     case 'EMPTY':
     case 'MALFORMED':
     case 'PROTOCOL':
@@ -78,7 +82,7 @@ export interface DeepResearchErrorItem {
 
 /**
  * @purpose Extracted article item returned from deep research.
- * @rationale Provides clean Markdown and article title alongside canonical destination URL and truncation status.
+ * @rationale Provides clean Markdown, title, destination URL, truncation status, HTTP status, and redirect count.
  * @invariants Readonly data structure.
  */
 export interface DeepResearchResultItem {
@@ -86,6 +90,8 @@ export interface DeepResearchResultItem {
   readonly url: string;
   readonly markdown: string;
   readonly truncated: boolean;
+  readonly status: number | null;
+  readonly redirectCount: number;
 }
 
 /**
@@ -127,14 +133,14 @@ export function applyBudget(
 
 /**
  * @purpose Orchestrates multi-source deep web research combining Google Search and sequential full-page extraction.
- * @rationale Executes Google Search for query discovery, enforces SSRF defenses, sequentially navigates and extracts top-N canonical URLs to clean GFM Markdown, and enforces strict token budgets with deterministic error discarding.
+ * @rationale Executes Google Search for query discovery, enforces SSRF defenses, sequentially navigates and extracts top-N canonical URLs to clean GFM Markdown, and enforces strict token and time budgets with deterministic error discarding.
  * @preconditions Query must be non-empty; browser pool must be operational.
- * @param params Deep research configuration parameters (query, limit, language, country, safeSearch, ultraFast, smartScroll, scrollDelayMs, maxScrolls, timeoutMs, maxCharsPerResult, maxTotalChars).
+ * @param params Deep research configuration parameters.
  * @param signal Optional AbortSignal for cooperative cancellation.
  * @param _logger Optional structured logger instance.
  * @returns Promise resolving to DeepResearchResult containing query, totals, excluded count, errors, and results.
  * @throws DomainError BAD_REQUEST on invalid query or cancellation, DomainError on search infrastructure failure.
- * @invariants Sequential execution (no Promise.all); invariant totalReturned + excludedCount === totalFound; sum of markdown lengths <= maxTotalChars.
+ * @invariants Sequential execution; invariant totalReturned + excludedCount === totalFound; sum of markdown lengths <= maxTotalChars.
  */
 export async function executeDeepResearch(
   params: DeepResearchParams,
@@ -155,20 +161,29 @@ export async function executeDeepResearch(
     throw new DomainError('BAD_REQUEST', 'Search query cannot be empty');
   }
 
-  // 3. Establish parameters with deterministic defaults (favoring bulk speed)
+  // 3. Establish parameters with deterministic defaults
   const limit = Math.min(10, Math.max(1, params.limit ?? 5));
   const language = params.language?.trim() || 'en';
   const country = params.country?.trim() || 'us';
   const safeSearch = params.safeSearch !== false;
   const ultraFast = params.ultraFast !== false;
   const smartScroll = params.smartScroll !== false;
-  const scrollDelayMs = params.scrollDelayMs ?? 500;
-  const maxScrolls = params.maxScrolls ?? 6;
-  const timeoutMs = params.timeoutMs ?? 30000;
+  const scrollDelayMs = params.scrollDelayMs ?? webResearchConfig.scrollDelayMs;
+  const maxScrolls = params.maxScrolls ?? webResearchConfig.maxScrollSteps;
   const maxCharsPerResult = params.maxCharsPerResult ?? 20000;
-  const maxTotalChars = params.maxTotalChars ?? 100000;
+  const maxTotalChars = params.maxTotalChars ?? webResearchConfig.maxMarkdownChars;
 
-  // 4. Execute Search Phase
+  // 4. Global deadline initialization (FR-06, FR-08)
+  const configuredBudget = params.timeoutMs ?? webResearchConfig.deepResearchBudgetMs;
+  const globalDeadline = Deadline.create(configuredBudget, signal);
+  const minPageBudgetMs = webResearchConfig.minPageBudgetMs;
+  const pageTimeoutMs = Math.min(
+    webResearchConfig.pageTimeoutMs,
+    globalDeadline.slice(webResearchConfig.pageTimeoutMs),
+  );
+
+  // 5. Execute Search Phase
+  globalDeadline.throwIfExpired();
   const searchResponse = await executeGoogleSearch(
     {
       query,
@@ -193,11 +208,13 @@ export async function executeDeepResearch(
     };
   }
 
-  // 5. Sequential Extraction Phase with Token Budgeting and Discard Tracking
+  // 6. Sequential Extraction Phase with Token Budgeting and Discard Tracking
   const results: DeepResearchResultItem[] = [];
   const errors: DeepResearchErrorItem[] = [];
   let excludedCount = 0;
-  let remainingBudget = maxTotalChars;
+  let remainingCharBudget = maxTotalChars;
+  const hostVisitCounts = new Map<string, number>();
+  const maxResultsPerHost = webResearchConfig.maxResultsPerHost;
 
   for (let i = 0; i < searchResponse.results.length; i++) {
     const item = searchResponse.results[i];
@@ -210,19 +227,38 @@ export async function executeDeepResearch(
       throw new DomainError('BAD_REQUEST', 'Operation cancelled by caller');
     }
 
-    // Check if character budget is exhausted before visiting next URL
-    if (remainingBudget <= 0) {
+    // Check time or character budget exhaustion before visiting next URL (FR-08)
+    if (globalDeadline.remaining < minPageBudgetMs || remainingCharBudget <= 0) {
       for (let j = i; j < searchResponse.results.length; j++) {
         const unvisited = searchResponse.results[j];
         if (unvisited) {
           errors.push({
             url: unvisited.url,
-            reason: 'budget_exceeded',
+            reason: 'budget_exhausted',
           });
           excludedCount++;
         }
       }
       break;
+    }
+
+    // Per-host extraction cap enforcement
+    let itemHost = '';
+    try {
+      itemHost = new URL(item.url).hostname.toLowerCase();
+    } catch {}
+
+    if (itemHost) {
+      const currentHostVisits = hostVisitCounts.get(itemHost) || 0;
+      if (currentHostVisits >= maxResultsPerHost) {
+        errors.push({
+          url: item.url,
+          reason: 'blocked',
+        });
+        excludedCount++;
+        continue;
+      }
+      hostVisitCounts.set(itemHost, currentHostVisits + 1);
     }
 
     // Pre-extraction SSRF and URL validation via pure classifier
@@ -236,17 +272,19 @@ export async function executeDeepResearch(
       continue;
     }
 
+    const perPageTimeout = Math.min(pageTimeoutMs, globalDeadline.remaining);
+
     try {
       const extracted = await extractSingleUrlContent(check.url, {
         signal,
-        timeoutMs,
+        timeoutMs: perPageTimeout,
         smartScroll,
         scrollDelayMs,
         maxScrolls,
         ultraFast,
       });
 
-      // Discard empty or whitespace-only markdown unless anti-bot fallback produced content
+      // Discard empty or whitespace-only markdown
       const trimmedMd = extracted.markdown?.trim() ?? '';
       if (!trimmedMd) {
         errors.push({
@@ -261,18 +299,20 @@ export async function executeDeepResearch(
       const { text, truncated } = applyBudget(
         extracted.markdown,
         maxCharsPerResult,
-        remainingBudget,
+        remainingCharBudget,
       );
-      remainingBudget -= text.length;
+      remainingCharBudget -= text.length;
 
       results.push({
         title: extracted.title,
         url: item.url,
         markdown: text,
         truncated,
+        status: extracted.status,
+        redirectCount: extracted.redirectCount,
       });
     } catch (err: unknown) {
-      // Propagate abort errors immediately
+      // Propagate client abort errors immediately
       if (
         signal?.aborted ||
         (err instanceof DomainError &&
@@ -285,20 +325,30 @@ export async function executeDeepResearch(
       }
 
       // Deterministic error categorization into short coded strings
-      let reason = 'unknown_error';
-      if (err instanceof DomainError) {
-        const msg = err.message.toLowerCase();
-        if (err.code === 'GATEWAY_TIMEOUT' || msg.includes('timeout')) {
-          reason = 'timeout';
-        } else {
-          reason = `error:${err.code.toLowerCase()}`;
-        }
-      } else if (err instanceof Error) {
-        if (err.message.toLowerCase().includes('timeout')) {
-          reason = 'timeout';
-        } else {
-          reason = 'error:extraction_failed';
-        }
+      let reason = 'error';
+      const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+
+      if (msg.includes('ssrf') || msg.includes('private or reserved') || msg.includes('internal')) {
+        reason = 'ssrf_blocked';
+      } else if (msg.includes('dns')) {
+        reason = 'dns_failure';
+      } else if (msg.includes('redirect')) {
+        reason = 'redirect_loop';
+      } else if (msg.includes('unsupported')) {
+        reason = 'unsupported_content';
+      } else if (msg.includes('empty')) {
+        reason = 'empty_content';
+      } else if (msg.includes('navigating')) {
+        reason = 'navigating';
+      } else if (
+        msg.includes('timeout') ||
+        (err instanceof DomainError && err.code === 'GATEWAY_TIMEOUT')
+      ) {
+        reason = 'timeout';
+      } else if (msg.includes('block') || msg.includes('wall')) {
+        reason = 'blocked';
+      } else if (err instanceof DomainError) {
+        reason = `http_status_${err.code.toLowerCase()}`;
       }
 
       errors.push({

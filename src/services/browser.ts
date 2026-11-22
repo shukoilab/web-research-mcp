@@ -1,6 +1,6 @@
 /**
  * @purpose Resilient stealth browser manager utilizing Patchright for antibot-resistant automation.
- * @rationale Implements singleton pre-warmed persistent browser context, tab-per-request pooling, self-healing crash recovery, and anti-zombie process lifecycle management.
+ * @rationale Implements singleton pre-warmed persistent browser context, signal-aware counting semaphore with bounded queue, self-healing crash recovery, and anti-zombie process lifecycle management.
  * @preconditions Chrome binary and Xvfb display must be available if non-headless mode is configured.
  * @invariants Singleton instance; concurrency bounded by semaphore; zero leaked tab handles; clean exit on process signals.
  */
@@ -11,6 +11,7 @@ import path from 'node:path';
 import { DomainError } from '@shukoi/core';
 import { type BrowserContext, chromium, type Page } from 'patchright';
 import { parseProxyConfig, webResearchConfig } from '../config.js';
+import { Deadline } from './deadline.js';
 
 /**
  * @purpose Ensures an X11 virtual framebuffer (Xvfb) is active on DISPLAY=:99 on Linux platforms.
@@ -24,8 +25,8 @@ import { parseProxyConfig, webResearchConfig } from '../config.js';
 export function ensureVirtualDisplay(): void {
   if (process.platform !== 'linux') return;
 
-  const lockPath = '/tmp/.X99-lock';
-  const socketPath = '/tmp/.X11-unix/X99';
+  const lockPath = webResearchConfig.xvfbLockPath;
+  const socketPath = webResearchConfig.xvfbSocketPath;
 
   // Self-healing check: verify if an active process genuinely owns the X99 display lock
   if (fs.existsSync(lockPath)) {
@@ -72,10 +73,10 @@ export function ensureVirtualDisplay(): void {
     const proc = spawn(
       'Xvfb',
       [
-        ':99',
+        webResearchConfig.defaultXvfbDisplay,
         '-screen',
         '0',
-        '1920x1080x24',
+        webResearchConfig.xvfbScreenResolution,
         '-nolisten',
         'tcp',
         '-ac',
@@ -142,19 +143,19 @@ export function resolveDisplay(): string | undefined {
 
   const currentDisplay = process.env.DISPLAY;
   if (currentDisplay && currentDisplay !== ':0' && currentDisplay !== ':1') {
-    if (currentDisplay === ':99') {
+    if (currentDisplay === webResearchConfig.defaultXvfbDisplay) {
       ensureVirtualDisplay();
     }
     return currentDisplay;
   }
 
   ensureVirtualDisplay();
-  return ':99';
+  return webResearchConfig.defaultXvfbDisplay;
 }
 
 /**
  * @purpose Structured browser health and performance metrics for readiness and liveness probes.
- * @rationale Informs orchestration monitors and AI agents of real browser subsystem status, tab concurrency, and memory consumption.
+ * @rationale Informs orchestration monitors and AI agents of real browser subsystem status, tab concurrency, and memory consumption without sensitive directory leaks.
  * @invariants Readonly telemetry structure.
  */
 export interface BrowserHealthMetrics {
@@ -163,9 +164,9 @@ export interface BrowserHealthMetrics {
   readonly prewarmed: boolean;
   readonly activeTabs: number;
   readonly maxCapacity: number;
+  readonly queuedRequests: number;
   readonly requestCount: number;
   readonly requestsSinceLastRecycle: number;
-  readonly userDataDir: string;
   readonly display?: string | undefined;
   readonly memory: {
     readonly heapUsedMb: number;
@@ -173,15 +174,6 @@ export interface BrowserHealthMetrics {
   };
   readonly uptimeSec: number;
 }
-
-const BLOCKED_RESOURCE_TYPES: ReadonlySet<string> = new Set([
-  'image',
-  'stylesheet',
-  'font',
-  'media',
-  'texttrack',
-  'manifest',
-]);
 
 /**
  * @purpose Intercepts and blocks non-essential subresources (images, stylesheets, fonts, media, text tracks, manifests) for a specific page.
@@ -193,9 +185,10 @@ const BLOCKED_RESOURCE_TYPES: ReadonlySet<string> = new Set([
  * @invariants Page-scoped interception; O(1) resource lookup; zero persistent context pollution; thread-safe.
  */
 export async function blockHeavyResources(page: Page): Promise<void> {
+  const blockedTypes = new Set(webResearchConfig.blockedResourceTypes);
   await page.route('**/*', async (route) => {
     const resourceType = route.request().resourceType();
-    if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
+    if (blockedTypes.has(resourceType)) {
       await route.abort('blockedbyclient').catch(() => {});
     } else {
       await route.fallback().catch(() => {});
@@ -214,11 +207,12 @@ export interface SmartScrollOptions {
   readonly scrollStepPx?: number;
   readonly networkIdleTimeoutMs?: number;
   readonly scrollSettleTimeoutMs?: number;
+  readonly unfoldInteractive?: boolean;
 }
 
 /**
  * @purpose Progressively scrolls down an active page to trigger IntersectionObserver lazy-loading, semantic DOM unfolding (W3C WAI-ARIA and native HTML5 disclosures), and detects DOM height convergence.
- * @rationale Eliminates language-locked regex patterns by adhering to W3C WAI-ARIA accessibility standards (`aria-expanded="false"`, `data-state="closed"`, `aria-controls`), native `<details>` disclosures, and in-browser CSS layout unclamping while preventing navigation hijacking.
+ * @rationale Eliminates language-locked regex patterns by adhering to W3C WAI-ARIA accessibility standards (`aria-expanded="false"`, `aria-controls`), native `<details>` disclosures, and safe bounded DOM interaction without navigation hijacking.
  * @preconditions page must be an active, navigated Page instance.
  * @param page Active Patchright Page instance.
  * @param options Optional SmartScrollOptions tuning parameters or maximum scroll count number.
@@ -239,6 +233,8 @@ export async function smartScrollAndHydrate(
   const networkIdleTimeoutMs = opts.networkIdleTimeoutMs ?? webResearchConfig.networkIdleTimeoutMs;
   const scrollSettleTimeoutMs =
     opts.scrollSettleTimeoutMs ?? webResearchConfig.scrollSettleTimeoutMs;
+  const unfoldInteractive = opts.unfoldInteractive ?? webResearchConfig.unfoldInteractive;
+  const maxUnfoldPerPage = webResearchConfig.maxUnfoldPerPage;
 
   try {
     // 1. Initial network idle wait with bounded budget to prevent stalls on streaming pages
@@ -246,19 +242,20 @@ export async function smartScrollAndHydrate(
 
     // 2. Progressive scroll loop inside browser context
     await page.evaluate(
-      async ({ maxSteps, stepPx, delayMs }) => {
+      async ({ maxSteps, stepPx, delayMs, shouldUnfold, maxUnfold }) => {
         const getScrollHeight = () =>
           document.scrollingElement?.scrollHeight ||
           Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
 
         let lastHeight = getScrollHeight();
         let step = 0;
+        let totalUnfolded = 0;
 
         while (step < maxSteps) {
           window.scrollBy(0, stepPx);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
 
-          // Pillar 1: Open native HTML5 disclosure details elements (zero click, zero side-effects)
+          // Native HTML5 disclosure details elements (zero click, zero side-effects)
           try {
             const collapsedDetails = document.querySelectorAll('details:not([open])');
             for (const d of collapsedDetails) {
@@ -266,96 +263,77 @@ export async function smartScrollAndHydrate(
             }
           } catch {}
 
-          // Pillar 2 & 3: W3C WAI-ARIA Standards & Relational Controls
-          try {
-            const candidates = document.querySelectorAll(
-              'button:not([data-mcp-unfolded]), [role="button"]:not([data-mcp-unfolded]), summary:not([data-mcp-unfolded])',
-            );
+          // Interactive W3C WAI-ARIA disclosure unfolding (strictly opt-in via unfoldInteractive)
+          if (shouldUnfold && totalUnfolded < maxUnfold) {
+            try {
+              // Target only candidates inside main, article, or role=main container
+              const contentRoot =
+                document.querySelector('main, article, [role="main"]') || document.body;
 
-            let unfoldedCount = 0;
-            const MAX_UNFOLD_PER_STEP = 50;
+              const candidates = contentRoot.querySelectorAll(
+                'button:not([data-mcp-unfolded]), [role="button"]:not([data-mcp-unfolded]), summary:not([data-mcp-unfolded])',
+              );
 
-            for (const el of candidates) {
-              if (unfoldedCount >= MAX_UNFOLD_PER_STEP) {
-                break;
-              }
+              for (const el of candidates) {
+                if (totalUnfolded >= maxUnfold) break;
 
-              // Tag element as inspected to maintain strict idempotency
-              el.setAttribute('data-mcp-unfolded', 'true');
+                el.setAttribute('data-mcp-unfolded', 'true');
 
-              // Strict Safety Guard 1: Never click navigation links or form submit/reset buttons
-              if (el.tagName.toLowerCase() === 'a') {
-                continue;
-              }
-              const btnType = el.getAttribute('type');
-              if (btnType === 'submit' || btnType === 'reset') {
-                continue;
-              }
+                // Strict Safety Guard 1: Never click links or submit/reset buttons
+                if (el.tagName.toLowerCase() === 'a') continue;
+                const btnType = el.getAttribute('type');
+                if (btnType === 'submit' || btnType === 'reset') continue;
 
-              // Strict Safety Guard 2: Exclude popup menus, dialogs, and modals
-              const hasPopup = el.getAttribute('aria-haspopup');
-              if (hasPopup === 'menu' || hasPopup === 'dialog' || hasPopup === 'true') {
-                continue;
-              }
+                // Strict Safety Guard 2: Exclude popup menus, dialogs, and modals
+                const hasPopup = el.getAttribute('aria-haspopup');
+                if (hasPopup === 'menu' || hasPopup === 'dialog' || hasPopup === 'true') continue;
 
-              // Check if element is a closed disclosure / accordion
-              const ariaExpanded = el.getAttribute('aria-expanded');
-              const dataState = el.getAttribute('data-state');
-              const ariaControls = el.getAttribute('aria-controls');
+                const ariaExpanded = el.getAttribute('aria-expanded');
+                const ariaControls = el.getAttribute('aria-controls');
 
-              let shouldTrigger = false;
+                // FR-09: a disclosure is only safe when it controls a hidden panel.
+                // aria-expanded="false" alone may be a mutating action (buy, delete, logout).
+                let shouldTrigger = false;
+                if (ariaControls && ariaExpanded !== 'true') {
+                  const target = document.getElementById(ariaControls);
+                  if (
+                    target &&
+                    (target.hasAttribute('hidden') ||
+                      target.getAttribute('aria-hidden') === 'true' ||
+                      window.getComputedStyle(target).display === 'none')
+                  ) {
+                    shouldTrigger = true;
+                  }
+                }
 
-              // Pillar 2: Explicit ARIA or headless state
-              if (ariaExpanded === 'false' || dataState === 'closed') {
-                shouldTrigger = true;
-              } else if (ariaControls) {
-                // Pillar 3: Target panel is currently hidden/collapsed
-                const target = document.getElementById(ariaControls);
-                if (
-                  target &&
-                  (target.hasAttribute('hidden') ||
-                    target.getAttribute('aria-hidden') === 'true' ||
-                    window.getComputedStyle(target).display === 'none')
-                ) {
-                  shouldTrigger = true;
+                if (shouldTrigger && el.isConnected) {
+                  try {
+                    (el as HTMLElement).click();
+                    totalUnfolded++;
+                  } catch {}
                 }
               }
-
-              if (shouldTrigger) {
-                try {
-                  (el as HTMLElement).click();
-                  unfoldedCount++;
-                } catch {}
-              }
-            }
-          } catch {}
+            } catch {}
+          }
 
           const newHeight = getScrollHeight();
           step++;
 
-          // Convergence check: if height has not increased and viewport is near bottom (with 15px subpixel buffer)
+          // Convergence check: if height has not increased and viewport is near bottom
           const currentScroll = window.scrollY || window.pageYOffset || 0;
           if (newHeight === lastHeight && currentScroll + window.innerHeight >= lastHeight - 15) {
             break;
           }
           lastHeight = newHeight;
         }
-
-        // Pillar 4: In-Browser CSS Layout Unclamping Engine
-        try {
-          const unclampStyle = document.createElement('style');
-          unclampStyle.id = 'mcp-unclamp-style';
-          unclampStyle.textContent = `
-            * {
-              -webkit-line-clamp: unset !important;
-              max-height: none !important;
-              overflow: visible !important;
-            }
-          `;
-          (document.head || document.body)?.appendChild(unclampStyle);
-        } catch {}
       },
-      { maxSteps: maxScrolls, stepPx: scrollStepPx, delayMs: scrollDelayMs },
+      {
+        maxSteps: maxScrolls,
+        stepPx: scrollStepPx,
+        delayMs: scrollDelayMs,
+        shouldUnfold: unfoldInteractive,
+        maxUnfold: maxUnfoldPerPage,
+      },
     );
 
     // 3. Brief quiet period for final lazy renders
@@ -366,49 +344,135 @@ export async function smartScrollAndHydrate(
 }
 
 /**
- * @purpose Concurrency counting semaphore controlling simultaneous active browser operations.
- * @rationale Prevents system memory exhaustion and browser crash under high burst traffic by queuing excess operations.
- * @invariants Permits never exceed capacity; FIFO queuing.
+ * @purpose Queue entry tracking an awaiting execution permit in AsyncSemaphore.
+ * @rationale Stores resolve/reject handlers, cancellation tokens, and optional timeout timer for cooperative abortion.
+ * @invariants Internal queue record.
  */
-class AsyncSemaphore {
+interface SemaphoreQueueEntry {
+  resolve: () => void;
+  reject: (err: unknown) => void;
+  signal?: AbortSignal;
+  timeoutHandle?: NodeJS.Timeout;
+}
+
+/**
+ * @purpose Concurrency counting semaphore controlling simultaneous active browser operations with queue limit and signal awareness.
+ * @rationale Prevents system memory exhaustion under burst traffic by queuing operations, bounds queue depth to prevent memory leaks, and purges aborted requests.
+ * @invariants Permits never exceed capacity; FIFO queuing; aborted requests removed immediately.
+ */
+export class AsyncSemaphore {
   private permits: number;
-  private readonly queue: Array<() => void> = [];
+  private readonly maxCapacity: number;
+  private readonly maxQueueLength: number;
+  private readonly queue: SemaphoreQueueEntry[] = [];
 
   /**
-   * @purpose Constructs a counting semaphore with maximum capacity.
-   * @rationale Enforces upper bound on concurrent executions.
-   * @preconditions maxCapacity must be an integer >= 1.
+   * @purpose Constructs a counting semaphore with maximum capacity and maximum queue length.
+   * @rationale Enforces strict upper bounds on both concurrency and queued pending operations.
+   * @preconditions maxCapacity >= 1; maxQueueLength >= 1.
    * @param maxCapacity Maximum concurrent permits allowed.
+   * @param maxQueueLength Maximum queue capacity before rejecting with 429.
    * @returns Instantiated AsyncSemaphore.
    * @throws Never throws.
-   * @invariants Immutable capacity limit.
+   * @invariants Immutable capacity limits.
    */
-  constructor(private readonly maxCapacity: number) {
-    this.permits = maxCapacity;
+  constructor(maxCapacity: number, maxQueueLength = webResearchConfig.maxQueueLength) {
+    this.maxCapacity = Math.max(1, maxCapacity);
+    this.maxQueueLength = Math.max(1, maxQueueLength);
+    this.permits = this.maxCapacity;
   }
 
   /**
-   * @purpose Acquires a single execution permit, awaiting available slot if saturated.
-   * @rationale Suspends execution cleanly using promises rather than busy-waiting.
-   * @preconditions None; semaphore must be initialized.
+   * @purpose Returns the number of currently queued awaiting requests.
+   * @rationale Supplies empirical telemetry for monitoring queue health and capacity saturation.
+   * @preconditions None.
    * @param None.
-   * @returns Promise resolving when permit is successfully acquired.
-   * @throws Never throws directly.
-   * @invariants O(1) queue insertion.
+   * @returns Non-negative integer count of queued waiters.
+   * @throws Never throws.
+   * @invariants Big-O time complexity O(1).
    */
-  async acquire(): Promise<void> {
+  public get queueLength(): number {
+    return this.queue.length;
+  }
+
+  /**
+   * @purpose Acquires a single execution permit, awaiting available slot if saturated, respecting cancellation signals and queue capacity limits.
+   * @rationale Suspends execution cleanly using promises rather than busy-waiting, purges waiters upon client abort, and rejects excess bursts.
+   * @preconditions None; semaphore must be initialized.
+   * @param options Optional controls including AbortSignal and timeout duration.
+   * @returns Promise resolving when permit is successfully acquired.
+   * @throws DomainError BAD_REQUEST if cancelled, GATEWAY_TIMEOUT on timeout, or RATE_LIMIT_EXCEEDED if queue capacity is breached.
+   * @invariants Aborted entries cleanly spliced from queue; Big-O time complexity O(1) permit acquisition.
+   */
+  async acquire(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<void> {
+    const signal = options?.signal;
+    if (signal?.aborted) {
+      throw new DomainError('BAD_REQUEST', 'Operation cancelled prior to permit acquisition');
+    }
+
     if (this.permits > 0) {
       this.permits--;
       return;
     }
-    return new Promise<void>((resolve) => {
-      this.queue.push(resolve);
+
+    if (this.queue.length >= this.maxQueueLength) {
+      throw new DomainError(
+        'RATE_LIMIT_EXCEEDED',
+        `Concurrency queue capacity of ${this.maxQueueLength} exceeded. Request rejected.`,
+      );
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let entry: SemaphoreQueueEntry;
+
+      const cleanup = () => {
+        const idx = this.queue.indexOf(entry);
+        if (idx !== -1) {
+          this.queue.splice(idx, 1);
+        }
+        if (entry.timeoutHandle) {
+          clearTimeout(entry.timeoutHandle);
+        }
+        if (signal && abortListener) {
+          signal.removeEventListener('abort', abortListener);
+        }
+      };
+
+      const abortListener = () => {
+        cleanup();
+        reject(new DomainError('BAD_REQUEST', 'Request was cancelled by client'));
+      };
+
+      entry = {
+        resolve: () => {
+          cleanup();
+          resolve();
+        },
+        reject: (err) => {
+          cleanup();
+          reject(err);
+        },
+        signal,
+      };
+
+      if (signal) {
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
+
+      if (options?.timeoutMs && options.timeoutMs > 0) {
+        entry.timeoutHandle = setTimeout(() => {
+          cleanup();
+          reject(new DomainError('GATEWAY_TIMEOUT', 'Timed out waiting for concurrency permit'));
+        }, options.timeoutMs);
+      }
+
+      this.queue.push(entry);
     });
   }
 
   /**
    * @purpose Releases an acquired execution permit, notifying queued tasks.
-   * @rationale Re-allocates permit immediately to oldest awaiting task.
+   * @rationale Re-allocates permit immediately to oldest un-aborted awaiting task.
    * @preconditions None; called when active tab finishes execution.
    * @param None.
    * @returns void
@@ -416,12 +480,14 @@ class AsyncSemaphore {
    * @invariants O(1) permit restoration.
    */
   release(): void {
-    if (this.queue.length > 0) {
+    while (this.queue.length > 0) {
       const next = this.queue.shift();
-      if (next) next();
-    } else {
-      this.permits = Math.min(this.maxCapacity, this.permits + 1);
+      if (next && !next.signal?.aborted) {
+        next.resolve();
+        return;
+      }
     }
+    this.permits = Math.min(this.maxCapacity, this.permits + 1);
   }
 }
 
@@ -450,7 +516,10 @@ export class BrowserManager {
    * @invariants Private constructor; anti-zombie process signal bindings.
    */
   private constructor() {
-    this.semaphore = new AsyncSemaphore(webResearchConfig.maxConcurrentPages);
+    this.semaphore = new AsyncSemaphore(
+      webResearchConfig.maxConcurrentPages,
+      webResearchConfig.maxQueueLength,
+    );
     this.registerProcessTraps();
   }
 
@@ -471,8 +540,8 @@ export class BrowserManager {
   }
 
   /**
-   * @purpose Attaches SIGINT, SIGTERM, beforeExit, exit, and disconnect traps to guarantee clean browser termination.
-   * @rationale Prevents orphaned/zombie Chrome child processes across POSIX and Windows operating systems.
+   * @purpose Attaches SIGINT and SIGTERM traps to guarantee clean browser termination.
+   * @rationale Prevents orphaned/zombie Chrome child processes across operating systems with consolidated shutdown coordination.
    * @preconditions None.
    * @param None.
    * @returns void
@@ -488,9 +557,6 @@ export class BrowserManager {
 
     process.once('SIGINT', cleanup);
     process.once('SIGTERM', cleanup);
-    process.once('beforeExit', cleanup);
-    process.once('exit', cleanup);
-    process.once('disconnect', cleanup);
   }
 
   /**
@@ -502,7 +568,7 @@ export class BrowserManager {
    * @throws DomainError SERVICE_UNAVAILABLE if browser launch fails or Google Chrome is missing.
    * @invariants Single-flight launch promise to prevent concurrent launch races.
    */
-  private async getContext(): Promise<BrowserContext> {
+  public async getContext(): Promise<BrowserContext> {
     if (this.isShuttingDown) {
       throw new DomainError('SERVICE_UNAVAILABLE', 'Browser engine is currently shutting down');
     }
@@ -521,13 +587,11 @@ export class BrowserManager {
         const targetDisplay = resolveDisplay();
         const displayEnv = targetDisplay ? { DISPLAY: targetDisplay } : {};
 
-        // On non-root host environments (Linux, macOS, Windows) outside CI, enable native sandbox to eliminate "--no-sandbox" warning banner
-        // In CI runners or root containers without user namespace permissions, fall back cleanly for speed and stability
         const isNonRoot = typeof process.getuid === 'function' ? process.getuid() !== 0 : true;
         const useSandbox = !process.env.CI && isNonRoot;
 
         const launched = await chromium.launchPersistentContext(webResearchConfig.userDataDir, {
-          channel: 'chrome',
+          channel: webResearchConfig.chromeChannel,
           headless: false,
           viewport: null,
           chromiumSandbox: useSandbox,
@@ -594,13 +658,13 @@ export class BrowserManager {
   }
 
   /**
-   * @purpose Returns live telemetry metrics regarding browser liveness, concurrency, and memory.
-   * @rationale Supplies empirical telemetry for HTTP and STDIO health check probes.
+   * @purpose Returns live telemetry metrics regarding browser liveness, concurrency, and memory without spawning processes or blocking the event loop.
+   * @rationale Supplies fast, read-only empirical telemetry for HTTP and STDIO health check probes.
    * @preconditions None.
    * @param None.
    * @returns BrowserHealthMetrics object.
    * @throws Never throws.
-   * @invariants Pure synchronous metric gathering.
+   * @invariants Pure synchronous metric gathering; zero external child process spawning; zero Atomics.wait.
    */
   public getHealthMetrics(): BrowserHealthMetrics {
     const mem = process.memoryUsage();
@@ -611,10 +675,10 @@ export class BrowserManager {
       prewarmed: isConnected,
       activeTabs: this.activeTabs,
       maxCapacity: webResearchConfig.maxConcurrentPages,
+      queuedRequests: this.semaphore.queueLength,
       requestCount: this.requestCount,
       requestsSinceLastRecycle: this.requestsSinceLastRecycle,
-      userDataDir: webResearchConfig.userDataDir,
-      display: resolveDisplay(),
+      display: process.env.DISPLAY || webResearchConfig.defaultXvfbDisplay,
       memory: {
         heapUsedMb: Math.round((mem.heapUsed / 1024 / 1024) * 100) / 100,
         rssMb: Math.round((mem.rss / 1024 / 1024) * 100) / 100,
@@ -642,12 +706,19 @@ export class BrowserManager {
       throw new DomainError('BAD_REQUEST', 'Operation cancelled prior to page acquisition');
     }
 
-    await this.semaphore.acquire();
+    const effectiveTimeout = options?.timeoutMs ?? webResearchConfig.browserTimeoutMs;
+    const deadline = Deadline.create(effectiveTimeout, signal);
+
+    await this.semaphore.acquire({
+      signal,
+      timeoutMs: deadline.remaining,
+    });
+
     this.activeTabs++;
     this.requestCount++;
     this.requestsSinceLastRecycle++;
 
-    // Graceful recycling: if requests since last recycle exceed threshold and this is the only active tab, recycle in background
+    // Graceful recycling: if requests since last recycle exceed threshold and this is the only active tab, recycle
     if (
       this.requestsSinceLastRecycle >= webResearchConfig.maxRequestsBeforeRecycle &&
       this.activeTabs === 1 &&
@@ -661,15 +732,14 @@ export class BrowserManager {
     let abortListener: (() => void) | null = null;
 
     try {
+      deadline.throwIfExpired();
       const context = await this.getContext();
-      if (signal?.aborted) {
-        throw new DomainError('BAD_REQUEST', 'Operation aborted after acquiring browser');
-      }
+      deadline.throwIfExpired();
 
       page = await context.newPage();
-      const timeout = options?.timeoutMs ?? webResearchConfig.browserTimeoutMs;
-      page.setDefaultTimeout(timeout);
-      page.setDefaultNavigationTimeout(timeout);
+      const remainingTimeout = Math.max(1000, deadline.remaining);
+      page.setDefaultTimeout(remainingTimeout);
+      page.setDefaultNavigationTimeout(remainingTimeout);
 
       if (signal) {
         abortListener = () => {

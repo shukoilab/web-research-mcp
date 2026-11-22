@@ -1,12 +1,13 @@
 /**
  * @purpose Protocol-agnostic Deep Research action (`deepResearchAction`) exposed over REST and MCP.
- * @rationale Automates end-to-end multi-source research by searching Google, extracting top-N canonical URLs sequentially to high-density Markdown, and enforcing strict token budgets.
+ * @rationale Automates end-to-end multi-source research by searching Google, extracting top-N canonical URLs sequentially to high-density Markdown, and enforcing strict token and time budgets.
  * @preconditions Input query must be a valid non-empty string; environment browser pool must be operational.
  * @invariants Pure Web-Standard action; zero node:* imports; additionalProperties: false enforced on all schemas.
  */
 
 import { defineAction } from '@shukoi/core';
 import { FormatRegistry, Type } from '@sinclair/typebox';
+import { DEFAULTS } from '../config.js';
 import { executeDeepResearch } from '../services/deep-research.js';
 
 // Register standard URI format in TypeBox format registry if not already defined
@@ -24,7 +25,7 @@ if (!FormatRegistry.Has('uri')) {
 /**
  * @purpose Deep research action definition implementing the Shukoi action contract.
  * @rationale Delivers bulk multi-source web research with sequential page extraction, anti-bot bypass, SSRF boundary isolation, and strict character budget controls.
- * @invariants Strict TypeBox contract; propagates ctx.signal; pure web-standard implementation.
+ * @invariants Strict TypeBox contract; propagates ctx.signal; pure web-standard implementation; static timeout ceiling.
  */
 export const deepResearchAction = defineAction({
   name: 'deepResearch',
@@ -33,6 +34,7 @@ export const deepResearchAction = defineAction({
   description:
     'Executes comprehensive, multi-source deep web research in a single call. Conducts Google Search, extracts top-N canonical search results sequentially into clean GitHub Flavored Markdown, filters boilerplate and anti-bot walls, and truncates results within strict per-result and total token budgets. Use this tool when you need full article content or synthesis across multiple sources for a research topic. For surgical single-page extraction when a target URL is already known, use `webExtract`. For query exploration or snippet triage, use `googleSearch`.',
   authRequired: false,
+  timeoutMs: DEFAULTS.DEEP_RESEARCH_BUDGET_MS + 10000,
   http: {
     method: 'POST',
     path: '/actions/deep-research',
@@ -103,7 +105,7 @@ export const deepResearchAction = defineAction({
         Type.Integer({
           minimum: 100,
           maximum: 5000,
-          default: 500,
+          default: DEFAULTS.SCROLL_DELAY_MS,
           description: 'Debounce wait time in milliseconds after each scroll step (default: 500)',
         }),
       ),
@@ -111,7 +113,7 @@ export const deepResearchAction = defineAction({
         Type.Integer({
           minimum: 0,
           maximum: 20,
-          default: 6,
+          default: DEFAULTS.MAX_SCROLL_STEPS,
           description: 'Maximum scroll step iterations for lazy content hydration (default: 6)',
         }),
       ),
@@ -119,7 +121,7 @@ export const deepResearchAction = defineAction({
         Type.Integer({
           minimum: 1000,
           maximum: 60000,
-          default: 30000,
+          default: DEFAULTS.PAGE_TIMEOUT_MS,
           description: 'Per-page navigation timeout in milliseconds (default: 30000)',
         }),
       ),
@@ -136,7 +138,7 @@ export const deepResearchAction = defineAction({
         Type.Integer({
           minimum: 100,
           maximum: 500000,
-          default: 100000,
+          default: DEFAULTS.MAX_MARKDOWN_CHARS,
           description:
             'Maximum total character budget across all extracted articles (default: 100000)',
         }),
@@ -161,7 +163,7 @@ export const deepResearchAction = defineAction({
             url: Type.String({ description: 'URL of the excluded result' }),
             reason: Type.String({
               description:
-                'Coded exclusion reason (e.g. ssrf_blocked, timeout, empty_content, budget_exceeded)',
+                'Coded exclusion reason (e.g. ssrf_blocked, timeout, empty_content, budget_exhausted)',
             }),
           },
           { additionalProperties: false },
@@ -177,6 +179,10 @@ export const deepResearchAction = defineAction({
             truncated: Type.Boolean({
               description: 'Whether the markdown was truncated by character limits',
             }),
+            status: Type.Union([Type.Integer(), Type.Null()], {
+              description: 'HTTP status code of the page response',
+            }),
+            redirectCount: Type.Integer({ description: 'Number of redirects followed' }),
           },
           { additionalProperties: false },
         ),

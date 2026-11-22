@@ -40,6 +40,9 @@ RUN chmod +x /app/docker-entrypoint.sh \
 # Prepare persistent chrome profile directory
 RUN mkdir -p /root/.cache/mcp-web-research/chrome-profile
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f "http://127.0.0.1:${PORT:-3000}/health" || exit 1
+
 EXPOSE 3000
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/docker-entrypoint.sh"]

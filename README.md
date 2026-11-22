@@ -44,22 +44,36 @@ All settings can be configured via environment variables. Universal defaults are
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `HOST` | `string` | `0.0.0.0` | Network interface address to bind HTTP service on VPS/host. |
+| `HOST` | `string` | `127.0.0.1` | Network interface address to bind HTTP service. Binding to non-loopback requires non-empty `MCP_API_KEY`. |
 | `PORT` | `integer` | `3000` | HTTP port for streamable MCP and health check endpoints. |
-| `ALLOWED_HOSTS` | `string` | `*` | Comma-separated list or wildcard (`*`) of allowed Host headers for DNS-rebinding protection. |
-| `ALLOWED_ORIGINS` | `string` | `*` | Comma-separated list or wildcard (`*`) of allowed Origin headers for CORS security. |
-| `MCP_API_KEY` / `API_KEY` | `string` | `undefined` | Optional secret token(s) for HTTP API protection (comma-separated for key rotation). If unset, auth is disabled. |
+| `ALLOWED_HOSTS` | `string` | `localhost,127.0.0.1` | Comma-separated list or wildcard (`*`) of allowed Host headers for DNS-rebinding protection. |
+| `ALLOWED_ORIGINS` | `string` | `localhost,127.0.0.1` | Comma-separated list or wildcard (`*`) of allowed Origin headers for CORS security. |
+| `MCP_API_KEY` / `API_KEY` | `string` | `undefined` | Secret token(s) for HTTP API protection (comma-separated for key rotation). Mandatory if `HOST` is non-loopback. Empty value causes fail-fast exit. |
 | `HTTP_PROXY` | `string` | `undefined` | Optional HTTP/HTTPS proxy URI (e.g. `http://user:pass@host:port`). |
 | `BROWSER_USER_DATA_DIR` | `string` | `~/.cache/mcp-web-research/chrome-profile` | Persistent directory storing Chrome cache, cookies, and session state. |
 | `BROWSER_TIMEOUT_MS` | `integer` | `30000` | Default navigation timeout in milliseconds. |
+| `REQUEST_BUDGET_MS` | `integer` | `60000` | Total time budget for single URL extraction (5000–300000 ms). |
+| `DEEP_RESEARCH_BUDGET_MS` | `integer` | `240000` | Total time budget for multi-source deep research batch (10000–600000 ms). |
+| `PAGE_TIMEOUT_MS` | `integer` | `30000` | Per-page navigation timeout limit (1000–120000 ms). |
+| `MIN_PAGE_BUDGET_MS` | `integer` | `5000` | Minimum remaining budget threshold required before visiting next page (500–60000 ms). |
+| `STABILIZE_TIMEOUT_MS` | `integer` | `3000` | Maximum time to wait for DOM readyState and URL settling (0–10000 ms). |
+| `SETTLE_POLL_MS` | `integer` | `150` | Polling interval in ms for document stability detection (50–1000 ms). |
+| `MAX_REDIRECTS` | `integer` | `10` | Maximum HTTP redirect hops allowed before classifying as redirect loop (0–20). |
+| `MAX_MARKDOWN_CHARS` | `integer` | `100000` | Character ceiling for serialized Markdown output (1000–1000000). |
 | `MAX_CONCURRENT_PAGES` | `integer` | `5` | Maximum simultaneous browser tabs allowed by semaphore. |
+| `MAX_QUEUE_LENGTH` | `integer` | `50` | Maximum waiting requests in semaphore queue before rejecting with HTTP 429 (1–1000). |
+| `MAX_RESULTS_PER_HOST` | `integer` | `2` | Maximum extracted search results permitted from a single domain in deep research (1–10). |
+| `DEFAULT_HTML_CHARSET` | `string` | `utf-8` | Default charset fallback for bare text/html documents without charset header. |
+| `DNS_CACHE_TTL_MS` | `integer` | `60000` | In-memory DNS resolution cache TTL in milliseconds (0–600000 ms). |
+| `GOOGLE_SEARCH_BASE` | `string` | `https://www.google.com/search` | Google search base URL endpoint. |
+| `UNFOLD_INTERACTIVE` | `boolean` | `false` | Opt-in to interactively unfold closed accordion buttons and ARIA controls inside main/article. |
 | `MAX_REQUESTS_BEFORE_RECYCLE` | `integer` | `1000` | Lifetime requests before background browser restart to prevent RAM fragmentation. |
 | `MAX_CONTENT_LENGTH` | `integer` | `5242880` (5MB) | Upper bound memory guard against massive HTML payloads. |
 | `NETWORK_IDLE_TIMEOUT_MS` | `integer` | `5000` | Maximum wait time in ms for initial network stabilization before scrolling. |
-| `SCROLL_DELAY_MS` | `integer` | `500` | Debounce delay in ms after each scroll step and semantic unfolding pass (increase to 1000–2000 for slow networks). |
+| `SCROLL_DELAY_MS` | `integer` | `500` | Debounce delay in ms after each scroll step (increase to 1000–2000 for slow networks). |
 | `SCROLL_STEP_PX` | `integer` | `1000` | Distance in pixels per scroll increment. |
 | `SCROLL_SETTLE_TIMEOUT_MS` | `integer` | `500` | Final quiet period in ms after scroll loop completes. |
-| `MAX_SCROLL_STEPS` | `integer` | `6` | Maximum scroll loop iterations for lazy content hydration, semantic unfolding, and DOM convergence. |
+| `MAX_SCROLL_STEPS` | `integer` | `6` | Maximum scroll loop iterations for lazy content hydration. |
 | `SEARCH_WAIT_TIMEOUT_MS` | `integer` | `10000` | Maximum wait time in ms for Google SERP cards to render before parsing results. |
 | `READABILITY_CHAR_THRESHOLD` | `integer` | `20` | Minimum character length for Mozilla Readability article scoring. |
 
@@ -69,14 +83,16 @@ All settings can be configured via environment variables. Universal defaults are
 
 ### Option 1: Docker Streamable HTTP Service (Recommended for Remote Agents, VPS & Teams)
 
-#### 1. Quick Start (Default Settings)
-Run as an isolated, persistent network service on any machine:
+#### 1. Quick Start (Loopback Only, No API Key)
+The service binds `127.0.0.1` by default, so it is reachable from the host only through host networking:
 
 ```bash
-docker run -d -p 3000:3000 --shm-size=1gb --name web-research-mcp --restart unless-stopped ghcr.io/shukoilab/web-research-mcp:latest
+docker run -d --network host --shm-size=1gb --name web-research-mcp --restart unless-stopped ghcr.io/shukoilab/web-research-mcp:latest
 ```
 
-> **Tip on Custom Host Ports:** If port 3000 is occupied on your host, forward your desired host port to container port 3000 (e.g. `-p 3031:3000`), or override the internal port via environment variable (e.g. `-p 3031:3031 -e PORT=3031`).
+Serves `http://127.0.0.1:3000/mcp` without authentication. Because host networking shares the host's X11 socket namespace, pass `-e XVFB_DISPLAY=:100` when the host already runs an X server or Xvfb on `:99`.
+
+> **Tip on Custom Ports:** With host networking, override the listen port directly via `-e PORT=3031` (then use `http://127.0.0.1:3031/mcp`). To publish through `-p` on a bridge network instead, you must also set `-e HOST=0.0.0.0` and a non-empty `-e MCP_API_KEY=...`, as shown in the next section.
 
 #### 2. Production VPS Deployment with Full Configuration Knobs
 Customize any operational parameter directly at runtime via environment variables (`-e`). You do **not** need to modify or rebuild the `Dockerfile`:

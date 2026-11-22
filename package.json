@@ -51,6 +51,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "dev": "node --watch src/entries/mcp-http.ts",
+    "prestart": "pnpm run build",
     "start": "node dist/entries/mcp-http.js",
     "bump": "tsx scripts/bump-version.ts",
     "docker:build": "docker build -t ghcr.io/shukoilab/web-research-mcp:latest .",

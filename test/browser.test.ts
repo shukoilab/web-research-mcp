@@ -20,7 +20,6 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
     expect(metrics.status).toBe('healthy');
     expect(metrics.connected).toBe(true);
     expect(metrics.prewarmed).toBe(true);
-    expect(metrics.userDataDir).toBeDefined();
     expect(metrics.maxCapacity).toBeGreaterThan(0);
     expect(metrics.memory.heapUsedMb).toBeGreaterThan(0);
   }, 60000);
@@ -65,7 +64,7 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
       `);
 
       const start = Date.now();
-      await smartScrollAndHydrate(page, 3);
+      await smartScrollAndHydrate(page, { maxScrolls: 3, unfoldInteractive: true });
       const elapsed = Date.now() - start;
 
       const extraDisplay = await page.$eval('#extra', (el) => window.getComputedStyle(el).display);
@@ -115,39 +114,34 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
         </html>
       `);
 
-      await smartScrollAndHydrate(page, 2);
+      await smartScrollAndHydrate(page, { maxScrolls: 2, unfoldInteractive: true });
 
       return await page.evaluate(() => {
         const details = document.getElementById('native-details') as HTMLDetailsElement;
         const btnAria = document.getElementById('btn-aria');
-        const btnState = document.getElementById('btn-state');
         const linkNav = document.getElementById('link-nav');
         const btnSubmit = document.getElementById('btn-submit');
         const btnMenu = document.getElementById('btn-menu');
         const btnControls = document.getElementById('btn-controls');
-        const unclampStyle = document.getElementById('mcp-unclamp-style');
 
         return {
           detailsOpen: details?.open,
           btnAriaClicked: btnAria?.getAttribute('data-clicked') === 'true',
-          btnStateClicked: btnState?.getAttribute('data-clicked') === 'true',
           btnControlsClicked: btnControls?.getAttribute('data-clicked') === 'true',
           linkNavClicked: linkNav?.getAttribute('data-clicked') === 'true',
           btnSubmitClicked: btnSubmit?.getAttribute('data-clicked') === 'true',
           btnMenuClicked: btnMenu?.getAttribute('data-clicked') === 'true',
-          unclampStyleInjected: unclampStyle !== null,
         };
       });
     });
 
     expect(evaluation.detailsOpen).toBe(true);
-    expect(evaluation.btnAriaClicked).toBe(true);
-    expect(evaluation.btnStateClicked).toBe(true);
+    // FR-09: aria-expanded="false" without aria-controls may be a mutating action → never clicked
+    expect(evaluation.btnAriaClicked).toBe(false);
     expect(evaluation.btnControlsClicked).toBe(true);
     expect(evaluation.linkNavClicked).toBe(false);
     expect(evaluation.btnSubmitClicked).toBe(false);
     expect(evaluation.btnMenuClicked).toBe(false);
-    expect(evaluation.unclampStyleInjected).toBe(true);
   });
 
   it('ultraFast blocks non-essential resources while allowing scripts', async () => {

@@ -1,6 +1,6 @@
 /**
  * @purpose Protocol-agnostic health, liveness, and readiness probe action (`healthAction`).
- * @rationale Supplies comprehensive subsystem metrics (browser connection status, active tabs, memory, display) for Kubernetes, Docker, and MCP agent monitors.
+ * @rationale Supplies comprehensive subsystem metrics (browser connection status, active tabs, memory, display) for Kubernetes, Docker, and MCP agent monitors without exposing sensitive server paths.
  * @preconditions Server must be initialized; metrics gathered from BrowserManager singleton.
  * @invariants Pure Web-Standard action; zero node:* imports; additionalProperties: false enforced on all schemas.
  */
@@ -12,7 +12,7 @@ import { BrowserManager } from '../services/browser.js';
 /**
  * @purpose Health check action definition implementing the Shukoi action contract.
  * @rationale Verifies real service readiness, browser persistence, and memory consumption.
- * @invariants Readonly telemetry schema; propagates ctx.logger; zero side effects.
+ * @invariants Readonly telemetry schema; propagates ctx.logger; zero side effects; zero directory leaks.
  */
 export const healthAction = defineAction({
   name: 'healthCheck',
@@ -48,7 +48,6 @@ export const healthAction = defineAction({
           activeTabs: Type.Integer({ description: 'Count of active concurrent tabs' }),
           maxCapacity: Type.Integer({ description: 'Maximum concurrent tab capacity' }),
           requestCount: Type.Integer({ description: 'Total requests served across lifecycle' }),
-          userDataDir: Type.String({ description: 'Persistent browser profile directory' }),
         },
         { additionalProperties: false },
       ),
@@ -77,7 +76,6 @@ export const healthAction = defineAction({
         activeTabs: metrics.activeTabs,
         maxCapacity: metrics.maxCapacity,
         requestCount: metrics.requestCount,
-        userDataDir: metrics.userDataDir,
       },
       display: metrics.display,
       memory: {

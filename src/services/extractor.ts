@@ -1,11 +1,12 @@
 /**
- * @purpose Content extraction and Markdown transformation pipeline using Linkedom, Mozilla Readability, and Unified.
- * @rationale Parses raw webpage HTML into a lightweight DOM, filters out boilerplate/navigation via Readability heuristics, and compiles clean GitHub Flavored Markdown.
- * @preconditions rawHtml must be a valid HTML string within memory limits.
- * @invariants Pure in-memory transformation; zero DOM memory leaks; Big-O time complexity O(n) where n is HTML byte length.
+ * @purpose Content extraction, URL absolutization, Markdown budgeting, and anti-bot wall detection pipeline.
+ * @rationale Parses raw webpage HTML with Linkedom, resolves relative URLs against final landed location, filters boilerplate via Mozilla Readability, and compiles token-efficient GitHub Flavored Markdown with strict paragraph-boundary truncation.
+ * @preconditions rawHtml must be a valid HTML string; finalUrl must be a valid URL string or undefined.
+ * @invariants Pure in-memory transformation; Big-O time complexity O(n); surrogate-pair safe UTF-16 truncation; zero synthetic metadata fabrication.
  */
 
 import { Readability } from '@mozilla/readability';
+import { DomainError } from '@shukoi/core';
 import { parseHTML } from 'linkedom';
 import rehypeParse from 'rehype-parse';
 import rehypeRemark from 'rehype-remark';
@@ -13,12 +14,13 @@ import remarkGfm from 'remark-gfm';
 import remarkStringify from 'remark-stringify';
 import { unified } from 'unified';
 import { webResearchConfig } from '../config.js';
-import { BrowserManager, blockHeavyResources, smartScrollAndHydrate } from './browser.js';
+import { BrowserManager, smartScrollAndHydrate } from './browser.js';
+import { type NavResult, navigateAndCapture } from './navigation.js';
 import { validatePublicUrl } from './ssrf.js';
 
 /**
  * @purpose Structured output result of content extraction.
- * @rationale Encapsulates metadata, article text, and high-fidelity Markdown for consumption by LLMs and downstream workflows.
+ * @rationale Encapsulates metadata, article text, high-fidelity Markdown, truncation flag, and bot-wall indicators.
  * @invariants Readonly data structure.
  */
 export interface ExtractedArticle {
@@ -26,9 +28,12 @@ export interface ExtractedArticle {
   readonly byline: string | null;
   readonly excerpt: string | null;
   readonly markdown: string;
+  readonly truncated: boolean;
+  readonly blocked: boolean;
+  readonly blockReason?: string;
 }
 
-// Reusable Unified AST processing pipeline instance (pre-compiled for O(1) instantiation overhead)
+// Reusable Unified AST processing pipeline instance
 const markdownProcessor = unified()
   .use(rehypeParse, { fragment: true })
   .use(rehypeRemark)
@@ -53,13 +58,49 @@ export function compressMarkdown(rawMd: string): string {
 }
 
 /**
+ * @purpose Enforces character budget on Markdown content with clean paragraph-boundary truncation and surrogate-pair safety.
+ * @rationale Prevents unbounded token consumption without corrupting Unicode characters or splitting sentences arbitrarily.
+ * @preconditions markdown is a string; maxChars is a non-negative integer.
+ * @param markdown Source Markdown string to truncate.
+ * @param maxChars Maximum character limit.
+ * @returns Object with bounded text and boolean truncated indicator.
+ * @throws Never throws directly.
+ * @invariants Bounded length; surrogate-pair safe; Big-O time complexity O(n).
+ */
+export function truncateMarkdown(
+  markdown: string,
+  maxChars = webResearchConfig.maxMarkdownChars,
+): { text: string; truncated: boolean } {
+  if (markdown.length <= maxChars) {
+    return { text: markdown, truncated: false };
+  }
+
+  // Find the last paragraph boundary before maxChars
+  let cutIndex = markdown.lastIndexOf('\n\n', maxChars);
+  if (cutIndex < maxChars / 2) {
+    cutIndex = maxChars;
+  }
+
+  // Guarantee surrogate pair safety: avoid splitting between high and low surrogates
+  if (cutIndex > 0) {
+    const code = markdown.charCodeAt(cutIndex - 1);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      cutIndex--;
+    }
+  }
+
+  const truncatedText = `${markdown.slice(0, cutIndex).trim()}\n\n[Content truncated due to size budget]`;
+  return { text: truncatedText, truncated: true };
+}
+
+/**
  * @purpose Converts an HTML string or fragment into clean GitHub Flavored Markdown (GFM).
- * @rationale Preserves tabular structures, headers, lists, code blocks, and formatted text while stripping scripts, styles, and decorative tags.
+ * @rationale Preserves tabular structures, headers, lists, code blocks, and formatted text while stripping scripts, styles, and decorative tags using Linkedom DOM fallback.
  * @preconditions html is a non-empty string.
  * @param html Cleaned HTML fragment.
  * @returns Serialized Markdown string.
- * @throws Never throws directly; AST errors produce sanitized fallback string.
- * @invariants Big-O time complexity O(n); pure serialization.
+ * @throws Never throws directly; AST errors produce sanitized Linkedom fallback string.
+ * @invariants Big-O time complexity O(n); pure serialization; zero regex-based script stripping.
  */
 export async function convertHtmlToMarkdown(html: string): Promise<string> {
   if (!html || html.trim() === '') {
@@ -69,25 +110,28 @@ export async function convertHtmlToMarkdown(html: string): Promise<string> {
     const vfile = await markdownProcessor.process(html);
     return compressMarkdown(String(vfile));
   } catch {
-    // Basic fallback regex strip if unified processing encounters abnormal malformed tokens
-    return compressMarkdown(
-      html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' '),
-    );
+    // Robust Linkedom DOM fallback stripping non-content elements without fragile regexes
+    try {
+      const { document } = parseHTML(html);
+      for (const el of document.querySelectorAll('script, style, noscript, svg, iframe')) {
+        el.remove();
+      }
+      return compressMarkdown(document.body?.textContent || '');
+    } catch {
+      return '';
+    }
   }
 }
 
 /**
- * @purpose Ingests raw webpage HTML, strips boilerplate, and produces structured article Markdown.
- * @rationale Employs Mozilla Readability heuristics with deterministic fallback to main/body elements and pre-rendered OpenGraph/meta descriptors when pages are non-article layouts or blocked by login walls.
+ * @purpose Ingests raw webpage HTML, absolutizes links, strips boilerplate, and produces structured article Markdown.
+ * @rationale Employs Mozilla Readability heuristics with deterministic fallback to main/body elements, absolutizes links against final landed URL, and detects bot/login walls without fabricating content.
  * @preconditions rawHtml must be a valid HTML string; input size is checked against maxContentLength.
  * @param rawHtml Raw source HTML from browser or fetch response.
- * @param fallbackTitle Optional fallback title if DOM lacks title elements or is replaced by SPA routing.
- * @param fallbackDescription Optional pre-hydration meta description captured before SPA redirection.
- * @returns ExtractedArticle containing clean title, byline, excerpt, and Markdown.
+ * @param fallbackTitle Optional fallback title if DOM lacks title elements.
+ * @param fallbackDescription Optional pre-hydration meta description.
+ * @param finalUrl Optional landed URL for resolving relative links and media sources.
+ * @returns ExtractedArticle containing clean title, byline, excerpt, Markdown, and status flags.
  * @throws Never throws unhandled; returns fallback payload on parse degradation.
  * @invariants Memory bounded by webResearchConfig.maxContentLength; pure DOM manipulation.
  */
@@ -95,6 +139,7 @@ export async function extractContentToMarkdown(
   rawHtml: string,
   fallbackTitle = 'Untitled',
   fallbackDescription?: string,
+  finalUrl?: string,
 ): Promise<ExtractedArticle> {
   const boundedHtml =
     rawHtml.length > webResearchConfig.maxContentLength
@@ -103,7 +148,61 @@ export async function extractContentToMarkdown(
 
   const { document } = parseHTML(boundedHtml);
 
-  // 1. Extract high-fidelity pre-rendered metadata prior to DOM sanitization
+  // 1. Resolve every relative href, src, and srcset against finalUrl before Readability (FR-05)
+  if (finalUrl) {
+    try {
+      const base = new URL(finalUrl);
+      for (const a of document.querySelectorAll('a[href]')) {
+        const raw = a.getAttribute('href');
+        if (
+          raw &&
+          !raw.startsWith('javascript:') &&
+          !raw.startsWith('#') &&
+          !raw.startsWith('mailto:')
+        ) {
+          try {
+            a.setAttribute('href', new URL(raw, base).href);
+          } catch {}
+        }
+      }
+      for (const img of document.querySelectorAll('img[src]')) {
+        const raw = img.getAttribute('src');
+        if (raw && !raw.startsWith('data:')) {
+          try {
+            img.setAttribute('src', new URL(raw, base).href);
+          } catch {}
+        }
+      }
+      for (const el of document.querySelectorAll('[srcset]')) {
+        const raw = el.getAttribute('srcset');
+        if (raw) {
+          try {
+            const rewritten = raw
+              .split(',')
+              .map((part) => {
+                const trimmed = part.trim();
+                const [src, descriptor] = trimmed.split(/\s+/, 2);
+                if (src && !src.startsWith('data:')) {
+                  try {
+                    const abs = new URL(src, base).href;
+                    return descriptor ? `${abs} ${descriptor}` : abs;
+                  } catch {
+                    return trimmed;
+                  }
+                }
+                return trimmed;
+              })
+              .join(', ');
+            el.setAttribute('srcset', rewritten);
+          } catch {}
+        }
+      }
+    } catch {
+      // Ignore base URL resolution failures
+    }
+  }
+
+  // 2. Extract metadata descriptors
   const metaDescription =
     document.querySelector('meta[name="description" i]')?.getAttribute('content')?.trim() ||
     document.querySelector('meta[property="og:description" i]')?.getAttribute('content')?.trim() ||
@@ -115,44 +214,6 @@ export async function extractContentToMarkdown(
     document.querySelector('meta[property="og:title" i]')?.getAttribute('content')?.trim() ||
     document.querySelector('meta[name="twitter:title" i]')?.getAttribute('content')?.trim() ||
     null;
-
-  // 2. Extract JSON-LD structured product or article metadata prior to stripping script tags
-  let jsonLdDescriptor: string | null = null;
-  try {
-    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-    for (const script of jsonLdScripts) {
-      const rawText = script.textContent?.trim();
-      if (!rawText) continue;
-      try {
-        const data = JSON.parse(rawText);
-        const items = Array.isArray(data) ? data : [data];
-        for (const item of items) {
-          if (!item || typeof item !== 'object') continue;
-          const itemType = String(item['@type'] || '');
-          if (itemType.includes('Product')) {
-            const lines: string[] = [];
-            if (item.name) lines.push(`**Produk:** ${item.name}`);
-            const brand = item.brand?.name || (typeof item.brand === 'string' ? item.brand : null);
-            if (brand) lines.push(`**Merek:** ${brand}`);
-            const offers = Array.isArray(item.offers) ? item.offers[0] : item.offers;
-            if (offers?.price) {
-              lines.push(`**Harga:** ${offers.priceCurrency || ''} ${offers.price}`.trim());
-            }
-            if (item.description) lines.push(`**Deskripsi:** ${item.description}`);
-            if (lines.length > 0) {
-              jsonLdDescriptor = lines.join('\n\n');
-              break;
-            }
-          }
-        }
-        if (jsonLdDescriptor) break;
-      } catch {
-        // Ignore malformed JSON-LD scripts
-      }
-    }
-  } catch {
-    // Suppress query selector failures
-  }
 
   // 3. Remove noisy elements (navigation, dialogs, modals, ads, and tracking)
   const noisyElements = document.querySelectorAll(
@@ -217,74 +278,56 @@ export async function extractContentToMarkdown(
   }
 
   // 8. Compile and compress to Markdown
-  let markdown = await convertHtmlToMarkdown(articleContentHtml);
+  const rawMarkdown = await convertHtmlToMarkdown(articleContentHtml);
 
-  // 9. Detect login gates or anti-bot verification walls (e.g. Shopee "Masuk Diperlukan", Cloudflare)
-  const LOGIN_BOT_WALL_PATTERNS = [
-    /masuk diperlukan/i,
-    /login required/i,
-    /sign in required/i,
-    /please sign in/i,
-    /verify you are human/i,
-    /attention required!\s*\|\s*cloudflare/i,
-    /just a moment\.\.\./i,
-    /security check to access/i,
-  ];
+  // 9. Detect login gates or anti-bot verification walls using configurable patterns (FR-18)
+  const wallPatterns = webResearchConfig.botWallPatterns;
+  let isWallDetected = false;
+  let matchedReason: string | undefined;
 
-  const isWallDetected = LOGIN_BOT_WALL_PATTERNS.some((p) => p.test(markdown));
-
-  if (
-    isWallDetected &&
-    (jsonLdDescriptor ||
-      fallbackDescription ||
-      metaDescription ||
-      ogTitle ||
-      (articleTitle && articleTitle !== 'Untitled') ||
-      fallbackTitle !== 'Untitled')
-  ) {
-    const bestTitle =
-      fallbackTitle && fallbackTitle !== 'Untitled'
-        ? fallbackTitle
-        : articleTitle && articleTitle !== 'Untitled'
-          ? articleTitle
-          : ogTitle || fallbackTitle;
-
-    const summaryText =
-      jsonLdDescriptor ||
-      fallbackDescription?.trim() ||
-      (metaDescription && !LOGIN_BOT_WALL_PATTERNS.some((p) => p.test(metaDescription))
-        ? metaDescription
-        : null) ||
-      (!LOGIN_BOT_WALL_PATTERNS.some((p) => p.test(articleExcerpt || ''))
-        ? articleExcerpt
-        : null) ||
-      'Tidak ada deskripsi tambahan pada metadata halaman ini.';
-
-    markdown = [
-      `> [!NOTE]`,
-      `> Target URL dilindungi sesi login atau verifikasi anti-bot. Konten berikut berhasil diekstrak secara otomatis dari metadata SSR sebelum dialog intervensi aktif.`,
-      ``,
-      `# ${bestTitle}`,
-      ``,
-      `**Deskripsi / Ringkasan:**`,
-      summaryText,
-    ].join('\n\n');
-
-    articleTitle = bestTitle;
-    articleExcerpt = summaryText;
+  for (const pattern of wallPatterns) {
+    const match = rawMarkdown.match(pattern);
+    if (match) {
+      isWallDetected = true;
+      matchedReason = `Anti-bot or login wall detected: "${match[0].trim().slice(0, 120)}"`;
+      break;
+    }
   }
+
+  // 10. Enforce Markdown budget with paragraph-boundary cut (FR-15)
+  const { text: budgetedMarkdown, truncated } = truncateMarkdown(
+    rawMarkdown,
+    webResearchConfig.maxMarkdownChars,
+  );
 
   return {
     title: articleTitle,
     byline: articleByline,
     excerpt: articleExcerpt,
-    markdown,
+    markdown: budgetedMarkdown,
+    truncated,
+    blocked: isWallDetected,
+    blockReason: isWallDetected ? matchedReason : undefined,
   };
 }
 
 /**
+ * @purpose Determines whether extracted Markdown meets the minimum viable content threshold.
+ * @rationale Pages that render only an anti-bot interstitial or a hydration skeleton yield a handful of characters; reporting them as a successful extraction misleads callers into treating noise as content.
+ * @preconditions markdown is the extracted Markdown string; minimumChars is a non-negative threshold.
+ * @param markdown Extracted Markdown body.
+ * @param minimumChars Minimum trimmed character count considered viable content.
+ * @returns True when the trimmed Markdown length meets or exceeds minimumChars.
+ * @throws Never throws.
+ * @invariants Pure; Big-O time complexity O(n) for trim; thread-safe.
+ */
+export function hasViableContent(markdown: string, minimumChars: number): boolean {
+  return markdown.trim().length >= minimumChars;
+}
+
+/**
  * @purpose Execution options for single URL content extraction.
- * @rationale Configures crawler navigation behavior, stealth resource blocking, and dynamic DOM hydration.
+ * @rationale Configures crawler navigation behavior, stealth resource blocking, dynamic DOM hydration, and unfolding.
  * @invariants Readonly options object.
  */
 export interface SingleUrlExtractOptions {
@@ -294,11 +337,12 @@ export interface SingleUrlExtractOptions {
   readonly scrollDelayMs?: number;
   readonly maxScrolls?: number;
   readonly ultraFast?: boolean;
+  readonly unfoldInteractive?: boolean;
 }
 
 /**
  * @purpose Structured output result of single URL content acquisition and extraction.
- * @rationale Delivers raw HTML alongside extracted Markdown and metadata for consumers.
+ * @rationale Delivers raw HTML alongside extracted Markdown, landed URL, HTTP status, and diagnostic flags.
  * @invariants Readonly data structure.
  */
 export interface SingleUrlExtractResult {
@@ -307,16 +351,22 @@ export interface SingleUrlExtractResult {
   readonly byline: string | null;
   readonly excerpt: string | null;
   readonly markdown: string;
+  readonly finalUrl: string;
+  readonly status: number | null;
+  readonly redirectCount: number;
+  readonly truncated: boolean;
+  readonly blocked: boolean;
+  readonly blockReason?: string;
 }
 
 /**
- * @purpose Navigates to a single public URL and extracts high-density Markdown and metadata.
- * @rationale Encapsulates stealth browser acquisition, optional heavy resource blocking (ultraFast), pre-hydration metadata capture, dynamic smart-scrolling, and unified Markdown serialization into a reusable service function.
- * @preconditions Input url must pass validatePublicUrl or be an already-validated URL object; signal (if provided) must not be aborted.
+ * @purpose Navigates to a single public URL and extracts high-density Markdown and metadata using resilient request-level guards.
+ * @rationale Encapsulates stealth browser acquisition, request-level SSRF guards, DOM settling, and unified Markdown serialization into a reusable service function.
+ * @preconditions Input url must pass validatePublicUrl or be an already-validated URL object; signal is not aborted.
  * @param url Target HTTP/HTTPS URL string or validated URL object to navigate and extract.
- * @param opts Optional extraction options (signal, timeoutMs, smartScroll, scrollDelayMs, maxScrolls, ultraFast).
- * @returns Promise resolving to SingleUrlExtractResult containing rawHtml, title, byline, excerpt, and markdown.
- * @throws DomainError BAD_REQUEST if URL fails SSRF validation or operation is aborted, GATEWAY_TIMEOUT on navigation timeout, SERVICE_UNAVAILABLE on browser context failure.
+ * @param opts Optional extraction options.
+ * @returns Promise resolving to SingleUrlExtractResult containing full metadata and Markdown.
+ * @throws DomainError BAD_REQUEST on SSRF violation, invalid URL, or unsupported media, GATEWAY_TIMEOUT on timeout, SERVICE_UNAVAILABLE on browser context failure.
  * @invariants Page handle closed in finally block; semaphore bounded; zero zombie browser processes.
  */
 export async function extractSingleUrlContent(
@@ -326,43 +376,24 @@ export async function extractSingleUrlContent(
   const validatedUrl = typeof url === 'string' ? validatePublicUrl(url) : url;
   const browserManager = BrowserManager.getInstance();
 
-  const { rawHtml, preHydrationTitle, preHydrationDescription } = await browserManager.withPage(
+  const navResult: NavResult = await browserManager.withPage(
     async (page) => {
-      if (opts.ultraFast === true) {
-        await blockHeavyResources(page);
-      }
-
-      await page.goto(validatedUrl.toString(), {
-        waitUntil: 'domcontentloaded',
+      const result = await navigateAndCapture(page, validatedUrl, {
+        signal: opts.signal,
+        timeoutMs: opts.timeoutMs,
+        ultraFast: opts.ultraFast,
       });
 
-      // Capture initial pre-hydration document title and meta description before potential client-side SPA redirects or login gates
-      const preMeta = await page
-        .evaluate(() => {
-          const title = document.title || '';
-          const desc =
-            document.querySelector('meta[name="description" i]')?.getAttribute('content') ||
-            document.querySelector('meta[property="og:description" i]')?.getAttribute('content') ||
-            document.querySelector('meta[name="twitter:description" i]')?.getAttribute('content') ||
-            '';
-          return { title, desc };
-        })
-        .catch(() => ({ title: '', desc: '' }));
-
-      // Execute smart progressive scrolling for dynamic SPAs and lazy XHR elements
-      if (opts.smartScroll !== false) {
+      // Execute smart progressive scrolling for dynamic SPAs and lazy XHR elements if navigation was successful
+      if (result.outcome === 'success' && opts.smartScroll !== false) {
         await smartScrollAndHydrate(page, {
           maxScrolls: opts.maxScrolls,
           scrollDelayMs: opts.scrollDelayMs,
+          unfoldInteractive: opts.unfoldInteractive,
         });
       }
 
-      const html = await page.content();
-      return {
-        rawHtml: html,
-        preHydrationTitle: preMeta.title,
-        preHydrationDescription: preMeta.desc,
-      };
+      return result;
     },
     {
       signal: opts.signal,
@@ -370,19 +401,79 @@ export async function extractSingleUrlContent(
     },
   );
 
-  // Extract article, sanitize noise, and compile to high-density Markdown
+  // Handle classified navigation outcomes
+  if (navResult.outcome === 'ssrf') {
+    throw new DomainError(
+      'BAD_REQUEST',
+      navResult.reason || 'Access to private or reserved target is prohibited',
+    );
+  }
+  if (navResult.outcome === 'redirect_loop') {
+    throw new DomainError(
+      'BAD_REQUEST',
+      navResult.reason || 'Redirect loop or too many redirects encountered',
+    );
+  }
+  if (navResult.outcome === 'unsupported_content') {
+    throw new DomainError(
+      'BAD_REQUEST',
+      navResult.reason || 'Target URL returned unsupported non-HTML media content',
+    );
+  }
+  if (navResult.outcome === 'empty_content') {
+    throw new DomainError(
+      'BAD_REQUEST',
+      navResult.reason || 'Target webpage returned empty content',
+    );
+  }
+  if (navResult.outcome === 'timeout') {
+    throw new DomainError(
+      'GATEWAY_TIMEOUT',
+      navResult.reason || 'Navigation to target URL timed out',
+    );
+  }
+  if (navResult.outcome === 'error') {
+    throw new DomainError(
+      'INTERNAL_SERVER_ERROR',
+      navResult.reason || 'Navigation execution failed',
+    );
+  }
+
+  // Extract article, sanitize noise, absolutize links, and compile to high-density Markdown
   const fallbackTitle =
-    preHydrationTitle && preHydrationTitle.trim() !== ''
-      ? preHydrationTitle.trim()
+    navResult.title && navResult.title.trim() !== ''
+      ? navResult.title.trim()
       : validatedUrl.hostname;
 
-  const extracted = await extractContentToMarkdown(rawHtml, fallbackTitle, preHydrationDescription);
+  const extracted = await extractContentToMarkdown(
+    navResult.html,
+    fallbackTitle,
+    navResult.description || undefined,
+    navResult.finalUrl,
+  );
+
+  // A detected wall is reported via `blocked`; otherwise near-empty output is indistinguishable from an empty body.
+  if (
+    !extracted.blocked &&
+    !hasViableContent(extracted.markdown, webResearchConfig.readabilityCharThreshold)
+  ) {
+    throw new DomainError(
+      'BAD_REQUEST',
+      `Target webpage produced empty content: extracted Markdown was ${extracted.markdown.trim().length} characters (minimum ${webResearchConfig.readabilityCharThreshold})`,
+    );
+  }
 
   return {
-    rawHtml,
+    rawHtml: navResult.html,
     title: extracted.title,
     byline: extracted.byline,
     excerpt: extracted.excerpt,
     markdown: extracted.markdown,
+    finalUrl: navResult.finalUrl,
+    status: navResult.status,
+    redirectCount: navResult.redirectCount,
+    truncated: extracted.truncated,
+    blocked: extracted.blocked,
+    blockReason: extracted.blockReason,
   };
 }
