@@ -201,6 +201,27 @@ describe('Shukoi Action Tri-Transport Parity & Contracts', () => {
       ).rejects.toThrowError(DomainError);
     });
 
+    it('accepts ultraFast and still returns Markdown', async () => {
+      const result = await harness.execute(webExtractAction, {
+        url: 'https://example.com',
+        ultraFast: true,
+      });
+      expect(result.url).toBe('https://example.com');
+      expect(result.title).toContain('Example Domain');
+      expect(result.markdown).toContain('documentation examples');
+    }, 25000);
+
+    it('rejects non-boolean ultraFast', async () => {
+      await expect(
+        harness.execute(webExtractAction, {
+          url: 'https://example.com',
+          ultraFast: 'yes' as unknown as boolean,
+        }),
+      ).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+      });
+    });
+
     it('executes web extraction on a valid URL and returns structured Markdown', async () => {
       const result = await harness.execute(webExtractAction, {
         url: 'https://example.com',

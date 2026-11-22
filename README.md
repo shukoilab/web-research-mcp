@@ -352,6 +352,7 @@ Navigates to any target URL, executes intelligent progressive scrolling to trigg
 **Input Parameters:**
 - `url` (*string, required, format: "uri", 1..2048 chars*): Target website URL (`http://` or `https://`). Accepts direct URLs or canonical URLs discovered via `googleSearch`.
 - `smartScroll` (*boolean, optional, default: true*): Enable automated progressive scroll, semantic unfolding, and XHR stabilization.
+- `ultraFast` (*boolean, optional, default: false*): Block images, external CSS, fonts, media, and manifest (JS + XHR still run) for faster extraction on image-heavy pages.
 - `scrollDelayMs` (*integer, optional, 100..5000, default: 500*): Debounce wait time in milliseconds after each scroll step (increase to 1000–2000ms for slow networks).
 - `maxScrolls` (*integer, optional, 0..20, default: 6*): Maximum scroll step iterations for lazy content hydration and DOM convergence.
 - `timeoutMs` (*integer, optional, 1000..60000, default: 30000*): Maximum navigation deadline.

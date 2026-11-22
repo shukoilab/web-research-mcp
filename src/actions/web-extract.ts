@@ -7,7 +7,7 @@
 
 import { defineAction } from '@shukoi/core';
 import { FormatRegistry, Type } from '@sinclair/typebox';
-import { BrowserManager, smartScrollAndHydrate } from '../services/browser.js';
+import { BrowserManager, blockHeavyResources, smartScrollAndHydrate } from '../services/browser.js';
 import { extractContentToMarkdown } from '../services/extractor.js';
 import { validatePublicUrl } from '../services/ssrf.js';
 
@@ -62,6 +62,13 @@ export const webExtractAction = defineAction({
           default: true,
           description:
             'Automatically scroll and wait for lazy-loaded XHR data to settle (recommended for e-commerce, SPA, and modern dynamic pages)',
+        }),
+      ),
+      ultraFast: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            'Block images, external CSS, fonts, media, and manifest (JS, XHR/fetch still run). Use for large, image-heavy or marketing pages when only text matters.',
         }),
       ),
       scrollDelayMs: Type.Optional(
@@ -119,6 +126,10 @@ export const webExtractAction = defineAction({
 
     const { rawHtml, preHydrationTitle, preHydrationDescription } = await browserManager.withPage(
       async (page) => {
+        if (input.ultraFast === true) {
+          await blockHeavyResources(page);
+        }
+
         await page.goto(validatedUrl.toString(), {
           waitUntil: 'domcontentloaded',
         });

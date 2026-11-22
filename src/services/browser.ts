@@ -174,6 +174,35 @@ export interface BrowserHealthMetrics {
   readonly uptimeSec: number;
 }
 
+const BLOCKED_RESOURCE_TYPES: ReadonlySet<string> = new Set([
+  'image',
+  'stylesheet',
+  'font',
+  'media',
+  'texttrack',
+  'manifest',
+]);
+
+/**
+ * @purpose Intercepts and blocks non-essential subresources (images, stylesheets, fonts, media, text tracks, manifests) for a specific page.
+ * @rationale Significantly accelerates navigation and minimizes bandwidth consumption during text-focused web extraction while preserving Patchright stealth init-scripts via route.fallback().
+ * @preconditions page must be an active, unclosed Page instance prior to navigation.
+ * @param page Active Patchright Page instance to attach the route interceptor to.
+ * @returns Promise resolving once the route handler is registered on the page.
+ * @throws Never throws directly; route abort and fallback rejections during page teardown are caught and swallowed.
+ * @invariants Page-scoped interception; O(1) resource lookup; zero persistent context pollution; thread-safe.
+ */
+export async function blockHeavyResources(page: Page): Promise<void> {
+  await page.route('**/*', async (route) => {
+    const resourceType = route.request().resourceType();
+    if (BLOCKED_RESOURCE_TYPES.has(resourceType)) {
+      await route.abort('blockedbyclient').catch(() => {});
+    } else {
+      await route.fallback().catch(() => {});
+    }
+  });
+}
+
 /**
  * @purpose Granular configuration options parameterizing smart progressive scrolling and XHR hydration.
  * @rationale Permits per-request tuning of scroll delays, maximum iterations, and timeouts to adapt to varying network speeds and page depths.

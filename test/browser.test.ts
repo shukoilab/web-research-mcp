@@ -1,6 +1,10 @@
 import { DomainError } from '@shukoi/core';
 import { afterAll, describe, expect, it } from 'vitest';
-import { BrowserManager, smartScrollAndHydrate } from '../src/services/browser.js';
+import {
+  BrowserManager,
+  blockHeavyResources,
+  smartScrollAndHydrate,
+} from '../src/services/browser.js';
 
 describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
   const browserManager = BrowserManager.getInstance();
@@ -144,6 +148,27 @@ describe('BrowserManager Stealth Integration on DISPLAY=:99', () => {
     expect(evaluation.btnSubmitClicked).toBe(false);
     expect(evaluation.btnMenuClicked).toBe(false);
     expect(evaluation.unclampStyleInjected).toBe(true);
+  });
+
+  it('ultraFast blocks non-essential resources while allowing scripts', async () => {
+    const failures: Record<string, string> = {};
+    await browserManager.withPage(async (page) => {
+      await blockHeavyResources(page);
+      page.on('requestfailed', (r) => {
+        failures[r.resourceType()] = r.failure()?.errorText ?? '';
+      });
+      await page.setContent(
+        `<html><head>
+           <link rel="stylesheet" href="https://nonexistent.invalid/a.css">
+           <img src="https://nonexistent.invalid/a.png">
+           <script src="https://nonexistent.invalid/a.js"></script>
+         </head><body>ok</body></html>`,
+        { waitUntil: 'load' },
+      );
+    });
+    expect(failures.image).toContain('net::ERR_BLOCKED_BY_CLIENT');
+    expect(failures.stylesheet).toContain('net::ERR_BLOCKED_BY_CLIENT');
+    expect(failures.script).toBe('net::ERR_NAME_NOT_RESOLVED');
   });
 
   it('launches Chrome stealth browser and evaluates page content', async () => {
